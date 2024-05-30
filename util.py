@@ -129,25 +129,6 @@ class Log:
             else:
                 print("   "*level+cyan("* ")+green(key)+":", yellow(value))
 
-    # def loss_train(self, opt, ep, lr, loss, timer):
-    #     """Docstring"""
-    #     if not opt.max_epoch:
-    #         return
-    #     message = grey("[train] ", bold=True)
-    #     message += f"epoch {cyan(ep, bold=True)}/{ opt.max_epoch}"
-    #     message += f", lr:{yellow("{lr:.2e}", bold=True)}"
-    #     message += f", loss:{red("{loss:.3e}", bold=True)}"
-    #     message += f", time:{blue("{0}-{1:02d}:{2:02d}:{3:02d}".format(*get_time(timer.elapsed)), bold=True)}"
-    #     message += f" (ETA:{ blue("{0}-{1:02d}:{2:02d}:{3:02d}".format(*get_time(timer.arrival)))})"
-    #     print(message)
-
-    # def loss_val(self, opt, loss):
-    #     """Docstring"""
-    #     message = grey("[val] ", bold=True)
-    #     message += "loss:{}".format(red("{:.3e}".format(loss), bold=True))
-    #     print(message)
-
-
 log = Log()
 
 
@@ -171,7 +152,7 @@ def move_to_device(x, device):
     if isinstance(x, dict):
         for k, v in x.items():
             x[k] = move_to_device(v, device)
-    elif isinstance(X, list):
+    elif isinstance(x, list):
         for i, e in enumerate(x):
             x[i] = move_to_device(e, device)
     elif isinstance(x, tuple) and hasattr(x, "_fields"):  # collections.namedtuple
@@ -186,7 +167,7 @@ def move_to_device(x, device):
 def to_dict(d, dict_type=dict):
     """Docstring"""
     d = dict_type(d)
-    for k, v in D.items():
+    for k, v in d.items():
         if isinstance(v, dict):
             d[k] = to_dict(v, dict_type)
     return d
@@ -200,26 +181,26 @@ def get_child_state_dict(state_dict, key):
 def restore_checkpoint(opt, model, load_name=None, resume=False):
     """Docstring"""
     # resume can be True/False or epoch numbers
-    assert ((load_name is None) == (resume is not False))
+    assert (load_name is None) == (resume is not False)
     if resume:
-        load_name = "{0}/model.ckpt".format(opt.output_path) if resume is True else \
-                    "{0}/model/{1}.ckpt".format(opt.output_path, resume)
+        load_name = f"{opt.output_path}/model.ckpt" if resume is True else \
+                    f"{opt.output_path}/model/{resume}.ckpt"
     checkpoint = torch.load(load_name, map_location=opt.device)
     # load individual (possibly partial) children modules
     for name, child in model.graph.named_children():
         child_state_dict = get_child_state_dict(checkpoint["graph"], name)
         if child_state_dict:
-            print("restoring {}...".format(name))
+            print(f"restoring {name}...")
             child.load_state_dict(child_state_dict)
     for key in model.__dict__:
         if key.split("_")[0] in ["optim", "sched"] and key in checkpoint and resume:
-            print("restoring {}...".format(key))
+            print(f"restoring {key}...")
             getattr(model, key).load_state_dict(checkpoint[key])
     if resume:
         ep, it = checkpoint["epoch"], checkpoint["iter"]
         if resume is not True:
-            assert (resume == (ep or it))
-        print("resuming from epoch {0} (iteration {1})".format(ep, it))
+            assert resume == (ep or it)
+        print(f"resuming from epoch {ep} (iteration {it})")
     else:
         ep, it = None, None
     return ep, it
@@ -227,7 +208,7 @@ def restore_checkpoint(opt, model, load_name=None, resume=False):
 
 def save_checkpoint(opt, model, ep, it, latest=False, children=None):
     """Docstring"""
-    os.makedirs("{0}/model".format(opt.output_path), exist_ok=True)
+    os.makedirs(f"{opt.output_path}/model", exist_ok=True)
     if children is not None:
         graph_state_dict = {
             k: v for k, v in model.graph.state_dict().items() if k.startswith(children)}
@@ -241,11 +222,11 @@ def save_checkpoint(opt, model, ep, it, latest=False, children=None):
     for key in model.__dict__:
         if key.split("_")[0] in ["optim", "sched"]:
             checkpoint.update({key: getattr(model, key).state_dict()})
-    torch.save(checkpoint, "{0}/model.ckpt".format(opt.output_path))
+    torch.save(checkpoint, f"{opt.output_path}/model.ckpt")
     if not latest:
-        shutil.copy("{0}/model.ckpt".format(opt.output_path),
+        shutil.copy(f"{opt.output_path}/model.ckpt",
                     # if ep is None, track it instead
-                    "{0}/model/{1}.ckpt".format(opt.output_path, ep or it))
+                    f"{opt.output_path}/model/{ep or it}.ckpt")
 
 
 def check_socket_open(hostname, port):
@@ -270,7 +251,7 @@ def get_layer_dims(layers):
 @contextlib.contextmanager
 def suppress(stdout=False, stderr=False):
     """Docstring"""
-    with open(os.devnull, "w") as devnull:
+    with open(os.devnull, "w") as devnull: # pylint: disable=unspecified-encoding
         if stdout:
             old_stdout, sys.stdout = sys.stdout, devnull
         if stderr:

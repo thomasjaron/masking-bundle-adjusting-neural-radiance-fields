@@ -15,7 +15,7 @@ def main():
     log.title(f"[{sys.argv[0]}] (PyTorch code for training NeRF/BARF)")
 
     opt_cmd = options.parse_arguments(sys.argv[1:])
-    opt = options.set(opt_cmd=opt_cmd)
+    opt = options.set_opt(opt_cmd=opt_cmd)
     options.save_options_file(opt)
 
     with torch.cuda.device(opt.device):

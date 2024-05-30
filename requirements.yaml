@@ -22,4 +22,4 @@ dependencies:
   - gdown
   - pip:
     - lpips
-    - pymcubes
+    # - pymcubes
