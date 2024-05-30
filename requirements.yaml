@@ -1,4 +1,4 @@
-name: barf-env
+name: better-barf
 channels:
   - conda-forge
   - pytorch
