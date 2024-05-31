@@ -342,7 +342,7 @@ class Graph(torch.nn.Module):
         loss = edict()
         if opt.loss_weight.render is not None:
             image_pert = var.image_pert.view(opt.batch_size, 3, opt.H_crop*opt.W_crop).permute(0, 2, 1) # pylint: disable=line-too-long
-            loss.render = self.MSE_loss(var.rgb_warped, image_pert)
+            loss.render = self.mse_loss(var.rgb_warped, image_pert)
         return loss
 
     def l1_loss(self,pred,label=0):

@@ -47,7 +47,7 @@ def set_opt(opt_cmd=None):
     assert "model" in opt_cmd
     # load config from yaml file
     assert "yaml" in opt_cmd
-    fname = "options/{opt_cmd.yaml}.yaml"
+    fname = f"options/{opt_cmd.yaml}.yaml"
     opt_base = load_options(fname)
     # override with command line arguments
     opt = override_options(opt_base, opt_cmd, key_stack=[], safe_check=True)

@@ -221,7 +221,8 @@ def save_checkpoint(opt, model, ep, it, latest=False, children=None):
     )
     for key in model.__dict__:
         if key.split("_")[0] in ["optim", "sched"]:
-            checkpoint.update({key: getattr(model, key).state_dict()})
+            if val := getattr(model, key):
+                checkpoint.update({key: val.state_dict()})
     torch.save(checkpoint, f"{opt.output_path}/model.ckpt")
     if not latest:
         shutil.copy(f"{opt.output_path}/model.ckpt",
