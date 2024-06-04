@@ -4,7 +4,7 @@ on:
     branches:
       - main
 jobs:
-  Check Linting:
+  check-linting:
     runs-on: ubuntu-latest
     steps:
       - name: Python linter
