@@ -1,23 +1,26 @@
-import numpy as np
-import os,sys,time
-import torch
+"""Main training entrypoint, generically usable for all BARF models"""
+
+import os
+import sys
 import importlib
+import torch
 
 import options
 from util import log
 
 def main():
+    """Main training entrypoint, generically usable for all BARF models"""
 
     log.process(os.getpid())
-    log.title("[{}] (PyTorch code for training NeRF/BARF)".format(sys.argv[0]))
+    log.title(f"[{sys.argv[0]}] (PyTorch code for training NeRF/BARF)")
 
     opt_cmd = options.parse_arguments(sys.argv[1:])
-    opt = options.set(opt_cmd=opt_cmd)
+    opt = options.set_opt(opt_cmd=opt_cmd)
     options.save_options_file(opt)
 
     with torch.cuda.device(opt.device):
 
-        model = importlib.import_module("model.{}".format(opt.model))
+        model = importlib.import_module(f"model.{opt.model}")
         m = model.Model(opt)
 
         m.load_dataset(opt)
