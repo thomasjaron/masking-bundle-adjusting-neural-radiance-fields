@@ -1,0 +1,12 @@
+name: Pylint
+on:
+  pull_request:
+    branches:
+      - main
+jobs:
+  Check Linting:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Python linter
+        id: pylint
+        uses: docker://reasonsoftware/action-pylint:v1
