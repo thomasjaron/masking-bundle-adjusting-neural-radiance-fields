@@ -17,6 +17,9 @@ arch:                                                       # architectural opti
 
 barf_c2f:                                                   # coarse-to-fine scheduling on positional encoding
 
+H: 360
+W: 480
+
 data:                                                       # data options
     root:                                                   # root path to dataset
     dataset:                                                # dataset name
@@ -58,15 +61,15 @@ optim:                                                      # optimization optio
         # steps:                                            # decay every N epochs
         # gamma: 0.1                                        # decay rate (can be empty if lr_end were specified)
 
-batch_size: 5                                               # batch size (set to number of patches to consider)
-max_iter: 5000                                              # train to maximum number of iterations
+batch_size: 20                                              # batch size (set to number of patches to consider)
+max_iter: 4000                                             # train to maximum number of iterations
 
 max_epoch: 1000                                             # train to maximum number of epochs
 resume: false                                               # resume training (true for latest checkpoint, or number for specific epoch number)
 
 output_root: output                                         # root path for output files (checkpoints and results)
 tb:                                                         # TensorBoard options
-    num_images: [4,8]                                       # number of (tiled) images to visualize in TensorBoard
+#     num_images: [4,8]                                       # number of (tiled) images to visualize in TensorBoard
 visdom:                                                     # Visdom options
 
 freq:                                                       # periodic actions during training
