@@ -52,35 +52,35 @@ class Model(torch.nn.Module):
         self.ep = self.it = self.vis_it = 0
         # self.vis = None
 
-    def load_dataset(self, opt):
-        """Load (single) raw input image into a tensor."""
-        log.info("loading dataset...")
-        image_raw = PIL.Image.open(opt.data.image_fname)
-        self.image_raw = torchvision_F.to_tensor(image_raw).to(opt.device)
+    def _prepare_images(self, opt, use_masks=False):
         image_tensors = []
-        mask_tensor = None
         image_paths = [
             f'data/planar/batch1/{i}.png' for i in range(opt.batch_size)
-        ]
-        mask_paths = [
-            f'data/planar/batch1/{i}-m.png' for i in range(opt.batch_size)
         ]
         for i in image_paths:
             im_i = PIL.Image.open(i).convert('RGB')
             image_tensor = torchvision_F.to_tensor(im_i).to(opt.device)
             image_tensors.append(image_tensor)
-        for i in mask_paths:
-            im_i = PIL.Image.open(i).convert('L')
-            if mask_tensor is None:
-                mask_tensor = (torchvision_F.to_tensor(im_i).to(opt.device) < 0.5).float()
-            else:
-                mask_tensor *= (torchvision_F.to_tensor(im_i).to(opt.device) < 0.5).float()
-            # mask_tensors.append((mask_tensor < 0.5).float())
         self.image_batches = torch.stack(image_tensors) # [B, 3, H, W]
-        self.mask_batches = mask_tensor.repeat(opt.batch_size, 1, 1, 1) # torch.stack(mask_tensors) # [B, 1, H, W]
-        # self.image_batches = self.image_batches.view(opt.batch_size, 3, opt.H*opt.W)
-        print(self.image_batches.shape)
-        print(self.mask_batches.shape)
+        if use_masks:
+            mask_paths = [
+                f'data/planar/batch1/{i}-m.png' for i in range(opt.batch_size)
+            ]
+            mask_tensor = None
+            for i in mask_paths:
+                im_i = PIL.Image.open(i).convert('L') # grayscale, 1 Dimensional Color value
+                if mask_tensor is None:
+                    mask_tensor = (torchvision_F.to_tensor(im_i).to(opt.device) < 0.5).float()
+                else:
+                    mask_tensor *= (torchvision_F.to_tensor(im_i).to(opt.device) < 0.5).float()
+                self.mask_batches = mask_tensor.repeat(opt.batch_size, 1, 1, 1) # [B, 1, H, W]
+
+    def load_dataset(self, opt):
+        """Load (single) raw input image into a tensor."""
+        log.info("loading dataset...")
+        image_raw = PIL.Image.open(opt.data.image_fname)
+        self.image_raw = torchvision_F.to_tensor(image_raw).to(opt.device)
+        self._prepare_images(opt)
 
     def build_networks(self, opt):
         """Builds Network"""
@@ -275,15 +275,24 @@ class Model(torch.nn.Module):
         if opt.warp.fix_first:
             warp_pert_all[0] = 0
         # create warped image patches
-        xy_grid = warp.get_normalized_pixel_grid_crop(opt) # [B, HW, 2]
-        xy_grid_warped = warp.warp_grid(opt, xy_grid, warp_pert_all)
-        xy_grid_warped = xy_grid_warped.view([opt.batch_size, opt.H_crop, opt.W_crop, 2])
-        xy_grid_warped = torch.stack([xy_grid_warped[..., 0]*max(opt.H, opt.W)/opt.W,
-                                      xy_grid_warped[..., 1]*max(opt.H, opt.W)/opt.H], dim=-1)
+        # xy_grid = warp.get_normalized_pixel_grid_crop(opt) # [B, HW, 2] coordinates
+        # xy_grid_warped = warp.warp_grid(opt, xy_grid, warp_pert_all)
+        # xy_grid_warped = xy_grid_warped.view([opt.batch_size, opt.H_crop, opt.W_crop, 2])
+        # xy_grid_warped = torch.stack([xy_grid_warped[..., 0]*max(opt.H, opt.W)/opt.W,
+        #                               xy_grid_warped[..., 1]*max(opt.H, opt.W)/opt.H], dim=-1)
         # image_raw_batch = self.image_raw.repeat(opt.batch_size, 1, 1, 1)
-        image_pert_all = torch_F.grid_sample(self.image_batches, xy_grid_warped, align_corners=False)
-        mask_pert_all = torch_F.grid_sample(self.mask_batches, xy_grid_warped, align_corners=False)
-        return warp_pert_all, image_pert_all, mask_pert_all
+        # image_pert_all = torch_F.grid_sample(self.image_batches, xy_grid_warped, align_corners=False)
+        # print(image_pert_all.size())
+        # for i in range(opt.batch_size):
+        #     print(image_pert_all[i].cpu().numpy().shape)
+        #     imageio.imsave(
+        #         f"{self.vis_path}/image_pert_{i}.png",
+        #         torchvision_F.to_pil_image(image_pert_all[i].cpu().permute(1,2,0).numpy()).convert("RGB")
+        #         )
+        # mask_pert_all = None
+        # if self.mask_batches:
+        #     mask_pert_all = torch_F.grid_sample(self.mask_batches, xy_grid_warped, align_corners=False)
+        return warp_pert_all, self.image_batches, self.mask_batches
 
     def visualize_patches(self, opt, warp_param):
         """"Visualize patches"""
@@ -350,7 +359,7 @@ class Model(torch.nn.Module):
     def visualize(self, opt, var, step=0, split="train"):
         """vizualize"""
         # dump frames for writing to video
-        frame_gt = self.visualize_patches(opt, self.warp_pert)
+        frame_gt = self.visualize_patches(opt, self.warp_pert) # draw square patches on original image
         frame = self.visualize_patches(opt, self.graph.warp_param.weight)
         frame2 = self.predict_entire_image(opt)
         frame_cat = (torch.cat([frame, frame2], dim=1)*255).byte().permute(1, 2, 0).numpy()
@@ -388,12 +397,12 @@ class Graph(torch.nn.Module):
 
     def forward(self, opt, var, mode=None): # pylint: disable=unused-argument
         """Forward graph"""
-        xy_grid = warp.get_normalized_pixel_grid_crop(opt)
+        xy_grid = warp.get_normalized_pixel_grid(opt) # [:1]
         xy_grid_warped = warp.warp_grid(opt, xy_grid, self.warp_param.weight)
         # render images
         var.rgb_warped = self.neural_image.forward(opt, xy_grid_warped) # [B, HW, 3]
         var.rgb_warped_map = var.rgb_warped.view(
-            opt.batch_size, opt.H_crop, opt.W_crop, 3
+            opt.batch_size, opt.H, opt.W, 3
             ).permute(0, 3, 1, 2) # [B, 3, H, W]
         return var
 
@@ -401,8 +410,10 @@ class Graph(torch.nn.Module):
         """Compute Loss"""
         loss = edict()
         if opt.loss_weight.render is not None:
-            image_pert = var.image_pert.view(opt.batch_size, 3, opt.H_crop*opt.W_crop).permute(0, 2, 1) # pylint: disable=line-too-long
-            mask_pert = var.mask_pert.view(opt.batch_size, 1, opt.H_crop*opt.W_crop).permute(0, 2, 1) # pylint: disable=line-too-long
+            image_pert = var.image_pert.view(opt.batch_size, 3, opt.H*opt.W).permute(0, 2, 1) # pylint: disable=line-too-long
+            mask_pert = None
+            if var.mask_pert:
+                mask_pert = var.mask_pert.view(opt.batch_size, 1, opt.H_crop*opt.W_crop).permute(0, 2, 1) # pylint: disable=line-too-long
 
             # loss gets computed for difference between
             # - previously calculated image patch (ground truth, var.image_pert)
@@ -414,12 +425,13 @@ class Graph(torch.nn.Module):
         """L1 Loss function"""
         loss = (pred.contiguous()-label).abs()
         return loss.mean()
-    def mse_loss(self,pred,label=0, mask=0):
+    def mse_loss(self,pred,label=0, mask=None):
         """MSE Loss Function"""
         loss = (pred.contiguous()-label)**2
-        masked_loss = loss * mask  # Apply mask to the loss
-        return masked_loss.sum() / mask.sum()
-        # return loss.mean()
+        if mask:
+            masked_loss = loss * mask  # Apply mask to the loss
+            return masked_loss.sum() / mask.sum()
+        return loss.mean()
 
 
 # ============================ Neural Image Function ============================
