@@ -61,8 +61,8 @@ optim:                                                      # optimization optio
         # steps:                                            # decay every N epochs
         # gamma: 0.1                                        # decay rate (can be empty if lr_end were specified)
 
-batch_size: 20                                              # batch size (set to number of patches to consider)
-max_iter: 4000                                             # train to maximum number of iterations
+batch_size: 5                                              # batch size (set to number of patches to consider)
+max_iter: 3500                                             # train to maximum number of iterations
 
 max_epoch: 1000                                             # train to maximum number of epochs
 resume: false                                               # resume training (true for latest checkpoint, or number for specific epoch number)
