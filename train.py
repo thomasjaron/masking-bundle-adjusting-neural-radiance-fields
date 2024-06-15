@@ -23,13 +23,13 @@ def main():
         model = importlib.import_module(f"model.{opt.model}")
         m = model.Model(opt)
 
-        m.load_dataset(opt)
-        m.build_networks(opt)
-        m.setup_optimizer(opt)
-        m.restore_checkpoint(opt)
-        m.setup_visualizer(opt)
+        m.load_dataset()
+        m.build_networks()
+        m.setup_optimizer()
+        m.restore_checkpoint()
+        m.setup_visualizer()
 
-        m.train(opt)
+        m.train()
 
 if __name__=="__main__":
     main()
