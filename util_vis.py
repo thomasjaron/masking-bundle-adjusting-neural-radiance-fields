@@ -49,4 +49,4 @@ def color_border(images, colors, width=3):
         image_pad[:, width:-width, width:-width] = image
         images_pad.append(image_pad)
     images_pad = torch.stack(images_pad, dim=0)
-    return images_pad
+    return images_pad # [B, 3, H, W]
