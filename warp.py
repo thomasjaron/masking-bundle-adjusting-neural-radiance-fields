@@ -14,6 +14,19 @@ def get_normalized_pixel_grid(opt):
     xy_grid = xy_grid.repeat(opt.batch_size, 1, 1)  # [B,HW,2]
     return xy_grid
 
+def get_normalized_pixel_grid_halfed(opt):
+    """Docstring"""
+    y_crop = (opt.H//2-opt.H//4, opt.H//2+opt.H//4)
+    x_crop = (opt.W//2-opt.W//4, opt.W//2+opt.W//4)
+    y_range = ((torch.arange(*(y_crop), dtype=torch.float32,
+               device=opt.device)+0.5)/opt.H*2-1)*(opt.H/max(opt.H, opt.W))
+    x_range = ((torch.arange(*(x_crop), dtype=torch.float32,
+               device=opt.device)+0.5)/opt.W*2-1)*(opt.W/max(opt.H, opt.W))
+    Y, X = torch.meshgrid(y_range, x_range)  # [H,W]
+    xy_grid = torch.stack([X, Y], dim=-1).view(-1, 2)  # [HW,2]
+    xy_grid = xy_grid.repeat(opt.batch_size, 1, 1)  # [B,HW,2]
+    return xy_grid
+
 
 def get_normalized_pixel_grid_crop(opt):
     """Docstring"""
@@ -66,10 +79,10 @@ def warp_corners(opt, warp_param): # warp_param = tensor containing an array as 
     # use the two range values and generate two new values representing the corners
     Y = [((y + 0.5) / opt.H * 2 - 1) * (opt.H / max(opt.H, opt.W)) for y in y_crop]
     X = [((x + 0.5) / opt.W * 2 - 1) * (opt.W / max(opt.H, opt.W)) for x in x_crop]
-    corners = [(X[0], Y[0]), (X[0], Y[1]), (X[1], Y[1]), (X[1], Y[0])]
+    corners = [(X[0], Y[0]), (X[0], Y[1]), (X[1], Y[1]), (X[1], Y[0])] # [4]
     # create a matrix with 5 copies of the corners tensor
     corners = torch.tensor(corners, dtype=torch.float32,
-                           device=opt.device).repeat(opt.batch_size, 1, 1)
+                           device=opt.device).repeat(opt.batch_size, 1, 1) # [B, 4]
     corners_warped = warp_grid(opt, corners, warp_param)
     return corners_warped
 

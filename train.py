@@ -26,7 +26,6 @@ def main():
         m.load_dataset()
         m.build_networks()
         m.setup_optimizer()
-        m.restore_checkpoint()
         m.setup_visualizer()
 
         m.train()

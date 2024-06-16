@@ -272,3 +272,54 @@ def colorcode_to_number(code):
     ords = [n-48 if n < 58 else n-87 for n in ords]
     rgb = (ords[0]*16+ords[1], ords[2]*16+ords[3], ords[4]*16+ords[5])
     return rgb
+
+
+# def align_images_with_keypoints(self):
+#     """Testing with keypoints alignment -Thomas """
+#     # Load the images
+#     first = self.image_batches[0].cpu().permute(1,2,0).numpy() # H x W x C
+
+#     images = []
+#     masks = []
+
+#     images.append(self.image_batches[0])
+#     masks.append(self.mask_batches[0])
+
+#     for i in range(1, self.batch_size):
+#         img = self.image_batches[i]
+#         mask = self.mask_batches[i]
+#         # Convert images to grayscale
+#         gray1 = cv2.cvtColor(first, cv2.COLOR_BGR2GRAY)
+#         gray2 = cv2.cvtColor(img.cpu().permute(1,2,0).numpy(), cv2.COLOR_BGR2GRAY)
+
+#         # Define the motion model
+#         warp_mode = cv2.MOTION_HOMOGRAPHY
+
+#         # Initialize the matrix to identity
+#         warp_matrix = np.eye(3, 3, dtype=np.float32)
+
+#         # Number of iterations
+#         number_of_iterations = 10000
+
+#         # Specify the threshold of the increment
+#         termination_eps = 1e-10
+
+#         # Define the termination criteria
+#         criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, number_of_iterations, termination_eps)
+
+#         # Run the ECC algorithm. The results are stored in warp_matrix.
+#         (cc, warp_matrix) = cv2.findTransformECC(gray1, gray2, warp_matrix, warp_mode, criteria)
+
+#         # Use warpPerspective for Homography
+#         img2_aligned = cv2.warpPerspective(img.cpu().permute(1,2,0).numpy(), warp_matrix, (first.shape[1], first.shape[0]), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
+#         mask_aligned = cv2.warpPerspective(mask.cpu().permute(1,2,0).numpy(), warp_matrix, (first.shape[1], first.shape[0]), flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
+
+#         img_new = torchvision_F.to_tensor(img2_aligned).to(self.opt.device)
+#         mask_new = torchvision_F.to_tensor(mask_aligned).to(self.opt.device)
+
+#         images.append(img_new)
+#         masks.append(mask_new)
+#         imageio.imsave(f"{i}.png", (img2_aligned * 255).astype(np.uint8))
+#         imageio.imsave(f"{i}-m.png", (mask_aligned * 255).astype(np.uint8))
+#     self.image_batches = torch.stack(images) # [B, 3, H, W]
+#     self.mask_batches = torch.stack(masks) # [B, 3, H, W]
