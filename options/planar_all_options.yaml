@@ -20,8 +20,8 @@ barf_c2f:                                                   # coarse-to-fine sch
 H: 360
 W: 480
 
-dataset: batch1                                             # directory containing images
-use_masks: false                                            # whether or not to utilize masks in loss calculation
+dataset: batch4                                             # directory containing images
+use_masks: true                                            # whether or not to utilize masks in loss calculation
 
 data:                                                       # data options
     root:                                                   # root path to dataset

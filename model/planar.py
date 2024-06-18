@@ -12,6 +12,7 @@ from easydict import EasyDict as edict
 import PIL
 import PIL.Image
 import PIL.ImageDraw
+import PIL.ImageOps
 import imageio
 import visdom
 import cv2
@@ -47,7 +48,6 @@ class Model(torch.nn.Module):
         self.iter_start = 0
 
         self.tb = None
-        self.vis = None
 
         self.box_colors = None
         self.vis_path = None
@@ -55,7 +55,7 @@ class Model(torch.nn.Module):
         self.timer = None
         self.warp_pert = None
         self.ep = self.it = self.vis_it = 0
-        # self.vis = None
+        self.histograms = None
 
     def _prepare_images(self, halfsize=False, use_masks=False):
         """Load distorted and occluded images used for reconstruction."""
@@ -86,17 +86,13 @@ class Model(torch.nn.Module):
         if use_masks:
             self.mask_batches = torch.stack(mask_tensors) # [B, 1, H, W]
 
-            mask_paths = [
-                f'data/planar/batch1/{i}-m.png' for i in range(self.batch_size)
-            ]
-            mask_tensor = None
-            for i in mask_paths:
-                im_i = PIL.Image.open(i).convert('L') # grayscale, 1 Dimensional Color value
-                if mask_tensor is None:
-                    mask_tensor = (torchvision_F.to_tensor(im_i).to(self.opt.device) < 0.5).float()
-                else:
-                    mask_tensor *= (torchvision_F.to_tensor(im_i).to(self.opt.device) < 0.5).float()
-                self.mask_batches = mask_tensor.repeat(self.batch_size, 1, 1, 1) # [B, 1, H, W]
+    def _prepare_histogram_normalized_images(self, halfsize=True):
+        normalized = []
+        for i in self.image_batches:
+            pil_image = torchvision_F.to_pil_image(i).convert('L')
+            pil_image = PIL.ImageOps.equalize(pil_image).convert('RGB')
+            normalized.append(torchvision_F.to_tensor(pil_image).to(self.opt.device))
+        self.histograms = torch.stack(normalized) # [B, 3, H, W]
 
     def load_dataset(self):
         """Load groundtruth input image into a tensor."""
@@ -104,6 +100,7 @@ class Model(torch.nn.Module):
         image_raw = PIL.Image.open(f'data/planar/{self.dataset}/gt.png')
         self.image_raw = torchvision_F.to_tensor(image_raw).to(self.opt.device)
         self._prepare_images(halfsize=True, use_masks=self.opt.use_masks)
+        self._prepare_histogram_normalized_images(halfsize=True)
 
     def build_networks(self):
         """Builds Network"""
@@ -176,6 +173,7 @@ class Model(torch.nn.Module):
         var = edict(idx=torch.arange(self.batch_size))
         var.image_pert = self.image_batches
         var.mask_pert = self.mask_batches
+        var.histograms = self.histograms
 
         # Training Loop
         var = util.move_to_device(var, self.opt.device)
@@ -200,8 +198,6 @@ class Model(torch.nn.Module):
         if self.opt.tb:
             self.tb.flush()
             self.tb.close()
-        if self.opt.visdom:
-            self.vis.close()
         log.title("TRAINING DONE")
 
     def summarize_loss(self, loss):
@@ -241,60 +237,6 @@ class Model(torch.nn.Module):
         util.update_timer(self.opt, self.timer, self.ep, len(loader))
         self.graph.neural_image.progress.data.fill_(self.it / self.opt.max_iter)
         return loss
-
-    def generate_warp_perturbation(self):
-        """generate warp perturbations"""
-        # pre-generate perturbations (translational noise + homography noise)
-        warp_pert_all = torch.zeros(self.opt.batch_size, self.opt.warp.dof, device=self.opt.device) # [ B x DOF ]
-
-        # noise_t: 0.2
-        # noise_h: 0.1
-
-        # (0,0) + 4 corner points
-        trans_pert = [(0, 0)] + \
-                [(x, y) for x in (-0.2, 0.2) for y in (-0.2, 0.2)] + \
-                [(0.2, 0), (-0.2, 0), (0, 0.2), (0, 0.2)]  + \
-                [(0, 0)] + \
-                [(x, y) for x in (-0.2, 0.2) for y in (-0.2, 0.2)] + \
-                [(0.2, 0), (-0.2, 0), (0, 0.2), (0, 0.2)] + \
-                [(0, 0)] + \
-                [(x, y) for x in (-0.2, 0.2) for y in (-0.2, 0.2)] + \
-                [(0.2, 0), (-0.2, 0), (0, 0.2), (0, 0.2)]
-
-        def create_random_perturbation():
-            warp_pert = torch.randn(self.opt.warp.dof, device=self.opt.device) * self.opt.warp.noise_h # [ DOF ]
-            # on the first and second value, add the position value of the current batch (see trans_pert)
-            # to the first two values of the randomized tensor.
-            warp_pert[0] += trans_pert[i][0]
-            warp_pert[1] += trans_pert[i][1]
-            return warp_pert
-
-        for i in range(self.batch_size): # i in [0..4]
-            warp_pert = create_random_perturbation() # length 8, modified first two values
-            while not warp.check_corners_in_range(self.opt, warp_pert[None]):
-                warp_pert = create_random_perturbation()
-            warp_pert_all[i] = warp_pert
-        if self.opt.warp.fix_first:
-            warp_pert_all[0] = 0
-        # create warped image patches
-        # xy_grid = warp.get_normalized_pixel_grid_crop(opt) # [B, HW, 2] coordinates
-        # xy_grid_warped = warp.warp_grid(opt, xy_grid, warp_pert_all)
-        # xy_grid_warped = xy_grid_warped.view([self.batch_size, opt.H_crop, opt.W_crop, 2])
-        # xy_grid_warped = torch.stack([xy_grid_warped[..., 0]*max(opt.H, opt.W)/opt.W,
-        #                               xy_grid_warped[..., 1]*max(opt.H, opt.W)/opt.H], dim=-1)
-        # image_raw_batch = self.image_raw.repeat(self.batch_size, 1, 1, 1)
-        # image_pert_all = torch_F.grid_sample(self.image_batches, xy_grid_warped, align_corners=False)
-        # print(image_pert_all.size())
-        # for i in range(self.batch_size):
-        #     print(image_pert_all[i].cpu().numpy().shape)
-        #     imageio.imsave(
-        #         f"{self.vis_path}/image_pert_{i}.png",
-        #         torchvision_F.to_pil_image(image_pert_all[i].cpu().permute(1,2,0).numpy()).convert("RGB")
-        #         )
-        # mask_pert_all = None
-        # if self.mask_batches:
-        #     mask_pert_all = torch_F.grid_sample(self.mask_batches, xy_grid_warped, align_corners=False)
-        return warp_pert_all, self.image_batches, self.mask_batches
 
     def visualize_patches(self, warp_param):
         """"Visualize current homography estimation for each image"""
@@ -425,6 +367,17 @@ class Graph(torch.nn.Module):
         var.rgb_warped_map = var.rgb_warped.view(
             self.batch_size, int(self.opt.H / 2), int(self.opt.W / 2), 3
             ).permute(0, 3, 1, 2) # [B, 3, H, W]
+
+        pred_histograms = []
+        for i in var.rgb_warped_map:
+            pil_image = torchvision_F.to_pil_image(i).convert('L')
+            pil_image = PIL.ImageOps.equalize(pil_image).convert('RGB')
+            pred_histograms.append(torchvision_F.to_tensor(pil_image).to(self.opt.device))
+        var.rgb_warped_hist = torch.stack(pred_histograms).view(self.batch_size, 3, int(self.opt.H / 2 * self.opt.W / 2)).permute(0, 2, 1) # [B, 3, H, W]
+            
+        # var.rgb_warped_hist = var.rgb_warped.view(
+        #     self.batch_size, int(self.opt.H / 2), int(self.opt.W / 2), 3
+        #     ).permute(0, 3, 1, 2) # [B, 3, H, W]
         return var
 
     def compute_loss(self, var, mode=None): # pylint: disable=unused-argument
@@ -435,21 +388,27 @@ class Graph(torch.nn.Module):
             mask_pert = None
             if var.mask_pert is not None:
                 mask_pert = var.mask_pert.view(self.batch_size, 1, int(self.opt.H / 2 * self.opt.W / 2)).permute(0, 2, 1) # pylint: disable=line-too-long
+            hist = None
+            if var.histograms is not None:
+                hist = var.histograms.view(self.batch_size, 3, int(self.opt.H / 2 * self.opt.W / 2)).permute(0, 2, 1) # pylint: disable=line-too-long
 
             # loss gets computed for difference between
             # - previously calculated image patch (ground truth, var.image_pert)
             # - current learned estimation (var.rgb_warped)
-            loss.render = self.mse_loss(var.rgb_warped, image_pert, mask_pert)
+            loss.render = self.mse_loss(var, image_pert, mask_pert, hist)
         return loss
 
-    def mse_loss(self,pred,label=0, mask=None):
+    def mse_loss(self,var,label=0, mask=None, hist=None):
         """MSE Loss Function"""
+        if hist is not None:
+            loss1 = (var.rgb_warped_hist.contiguous() - hist)**2
+            # return loss.mean()
         if mask is None:
-            loss = (pred.contiguous() - label)**2
+            loss = (var.rgb_warped.contiguous() - label)**2 * loss1.mean()
             return loss.mean()
 
-        masked_diff = (pred.contiguous() - label) * mask
-        masked_loss = masked_diff**2
+        masked_diff = (var.rgb_warped.contiguous() - label) * mask
+        masked_loss = masked_diff**2 * loss1.mean()
         mean_loss = masked_loss.sum() / mask.sum()  # Only average over unmasked elements
         return mean_loss
 
