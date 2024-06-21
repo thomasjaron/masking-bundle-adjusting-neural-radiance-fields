@@ -71,6 +71,7 @@ class Model(torch.nn.Module):
             image_i = PIL.Image.open(i).convert('RGB')
             if use_masks:
                 mask_i = PIL.Image.open(m).convert('L') # grayscale
+                self.image_raw *= (torchvision_F.to_tensor(mask_i).to(self.opt.device) < 0.5).float()
             if halfsize:
                 image_i.thumbnail((self.opt.W / 2, self.opt.H / 2), PIL.Image.Resampling.LANCZOS)
                 if use_masks:
@@ -86,21 +87,21 @@ class Model(torch.nn.Module):
         if use_masks:
             self.mask_batches = torch.stack(mask_tensors) # [B, 1, H, W]
 
-    def _prepare_histogram_normalized_images(self, halfsize=True):
-        normalized = []
-        for i in self.image_batches:
-            pil_image = torchvision_F.to_pil_image(i).convert('L')
-            pil_image = PIL.ImageOps.equalize(pil_image).convert('RGB')
-            normalized.append(torchvision_F.to_tensor(pil_image).to(self.opt.device))
-        self.histograms = torch.stack(normalized) # [B, 3, H, W]
+    # def _prepare_histogram_normalized_images(self, halfsize=True):
+    #     normalized = []
+    #     for i in self.image_batches:
+    #         pil_image = torchvision_F.to_pil_image(i).convert('L')
+    #         pil_image = PIL.ImageOps.equalize(pil_image).convert('RGB')
+    #         normalized.append(torchvision_F.to_tensor(pil_image).to(self.opt.device))
+    #     self.histograms = torch.stack(normalized) # [B, 3, H, W]
 
     def load_dataset(self):
         """Load groundtruth input image into a tensor."""
         log.info("loading dataset...")
         image_raw = PIL.Image.open(f'data/planar/{self.dataset}/gt.png')
         self.image_raw = torchvision_F.to_tensor(image_raw).to(self.opt.device)
-        self._prepare_images(halfsize=True, use_masks=self.opt.use_masks)
-        self._prepare_histogram_normalized_images(halfsize=True)
+        self._prepare_images(halfsize=self.opt.halfsize, use_masks=self.opt.use_masks)
+        # self._prepare_histogram_normalized_images(halfsize=True)
 
     def build_networks(self):
         """Builds Network"""
@@ -173,7 +174,7 @@ class Model(torch.nn.Module):
         var = edict(idx=torch.arange(self.batch_size))
         var.image_pert = self.image_batches
         var.mask_pert = self.mask_batches
-        var.histograms = self.histograms
+        # var.histograms = self.histograms
 
         # Training Loop
         var = util.move_to_device(var, self.opt.device)
@@ -193,7 +194,6 @@ class Model(torch.nn.Module):
         os.system(
             f"ffmpeg -y -framerate 30 -i {self.vis_path}/%d.png -pix_fmt yuv420p {self.video_fname}"
         )
-        self.save_checkpoint(ep=None, it=self.it)
         # clear tensorboard and visualization
         if self.opt.tb:
             self.tb.flush()
@@ -358,22 +358,25 @@ class Graph(torch.nn.Module):
 
     def forward(self, var, mode=None): # pylint: disable=unused-argument
         """Get image prediction given the current homographies"""
-        xy_grid = warp.get_normalized_pixel_grid_halfed(self.opt) # [:1]
+        xy_grid = warp.get_normalized_pixel_grid_halfed(self.opt) if self.opt.halfsize else \
+            warp.get_normalized_pixel_grid(self.opt) # [:1]
         # warp grid according to warp_param.weight homographies for each image.
         xy_grid_warped = warp.warp_grid(self.opt, xy_grid, self.warp_param.weight)
         # get rgb image prediction for the warped 2d area
         var.rgb_warped = self.neural_image.forward(xy_grid_warped) # [B, HW, 3]
         # used for tensorboard visualisation
+        h = self.opt.H / 2 if self.opt.halfsize else self.opt.H
+        w = self.opt.W / 2 if self.opt.halfsize else self.opt.W
         var.rgb_warped_map = var.rgb_warped.view(
-            self.batch_size, int(self.opt.H / 2), int(self.opt.W / 2), 3
+            self.batch_size, int(h), int(w), 3
             ).permute(0, 3, 1, 2) # [B, 3, H, W]
 
-        pred_histograms = []
-        for i in var.rgb_warped_map:
-            pil_image = torchvision_F.to_pil_image(i).convert('L')
-            pil_image = PIL.ImageOps.equalize(pil_image).convert('RGB')
-            pred_histograms.append(torchvision_F.to_tensor(pil_image).to(self.opt.device))
-        var.rgb_warped_hist = torch.stack(pred_histograms).view(self.batch_size, 3, int(self.opt.H / 2 * self.opt.W / 2)).permute(0, 2, 1) # [B, 3, H, W]
+        # pred_histograms = []
+        # for i in var.rgb_warped_map:
+        #     pil_image = torchvision_F.to_pil_image(i).convert('L')
+        #     pil_image = PIL.ImageOps.equalize(pil_image).convert('RGB')
+        #     pred_histograms.append(torchvision_F.to_tensor(pil_image).to(self.opt.device))
+        # var.rgb_warped_hist = torch.stack(pred_histograms).view(self.batch_size, 3, int(self.opt.H / 2 * self.opt.W / 2)).permute(0, 2, 1) # [B, 3, H, W]
             
         # var.rgb_warped_hist = var.rgb_warped.view(
         #     self.batch_size, int(self.opt.H / 2), int(self.opt.W / 2), 3
@@ -384,13 +387,15 @@ class Graph(torch.nn.Module):
         """Compute Loss"""
         loss = edict()
         if self.opt.loss_weight.render is not None:
-            image_pert = var.image_pert.view(self.batch_size, 3, int(self.opt.H / 2 * self.opt.W / 2)).permute(0, 2, 1) # pylint: disable=line-too-long
+            h = self.opt.H / 2 if self.opt.halfsize else self.opt.H
+            w = self.opt.W / 2 if self.opt.halfsize else self.opt.W
+            image_pert = var.image_pert.view(self.batch_size, 3, int(h * w)).permute(0, 2, 1) # pylint: disable=line-too-long
             mask_pert = None
             if var.mask_pert is not None:
-                mask_pert = var.mask_pert.view(self.batch_size, 1, int(self.opt.H / 2 * self.opt.W / 2)).permute(0, 2, 1) # pylint: disable=line-too-long
+                mask_pert = var.mask_pert.view(self.batch_size, 1, int(h * w)).permute(0, 2, 1) # pylint: disable=line-too-long
             hist = None
-            if var.histograms is not None:
-                hist = var.histograms.view(self.batch_size, 3, int(self.opt.H / 2 * self.opt.W / 2)).permute(0, 2, 1) # pylint: disable=line-too-long
+            # if var.histograms is not None:
+            #     hist = var.histograms.view(self.batch_size, 3, int(self.opt.H / 2 * self.opt.W / 2)).permute(0, 2, 1) # pylint: disable=line-too-long
 
             # loss gets computed for difference between
             # - previously calculated image patch (ground truth, var.image_pert)
@@ -408,7 +413,7 @@ class Graph(torch.nn.Module):
             return loss.mean()
 
         masked_diff = (var.rgb_warped.contiguous() - label) * mask
-        masked_loss = masked_diff**2 * loss1.mean()
+        masked_loss = masked_diff**2
         mean_loss = masked_loss.sum() / mask.sum()  # Only average over unmasked elements
         return mean_loss
 
