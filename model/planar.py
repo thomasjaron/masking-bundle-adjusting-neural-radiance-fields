@@ -20,7 +20,7 @@ import cv2
 import util
 import util_vis
 from util import log
-import warp
+from warp import Warp
 
 # ============================ main engine for training and evaluation ============================
 
@@ -34,6 +34,7 @@ class Model(torch.nn.Module):
         self.dataset = opt.dataset
         os.makedirs(opt.output_path,exist_ok=True)
         opt.H_crop, opt.W_crop = opt.data.patch_crop
+        self.warp = Warp(opt)
         # load dataset
         self.image_raw = None
         self.image_batches = None
@@ -244,7 +245,7 @@ class Model(torch.nn.Module):
         draw_pil = PIL.Image.new("RGBA", image_pil.size, (0, 0, 0, 0))
         draw = PIL.ImageDraw.Draw(draw_pil)
         # compute corners of each homography
-        corners_all = warp.warp_corners(self.opt, warp_param)
+        corners_all = self.warp.warp_corners(warp_param)
         corners_all[..., 0] = (
             corners_all[..., 0] / self.opt.W * max(self.opt.H, self.opt.W) + 1
             ) / 2 * self.opt.W - 0.5
@@ -286,7 +287,7 @@ class Model(torch.nn.Module):
     @torch.no_grad()
     def predict_entire_image(self):
         """Predict entire image"""
-        xy_grid = warp.get_normalized_pixel_grid(self.opt)[:1]
+        xy_grid = self.warp.get_normalized_pixel_grid()[:1]
         rgb = self.graph.neural_image.forward(xy_grid) # [B, HW, 3]
         image = rgb.view(self.opt.H, self.opt.W, 3).detach().cpu().permute(2, 0, 1)
         return image
@@ -352,16 +353,16 @@ class Graph(torch.nn.Module):
         self.opt = opt
         self.batch_size = opt.batch_size
         self.neural_image = NeuralImageFunction(opt)
+        self.warp = Warp(opt)
         # represents the homographies for each input image
         self.warp_param = torch.nn.Embedding(self.batch_size, opt.warp.dof).to(opt.device)
         torch.nn.init.zeros_(self.warp_param.weight)
 
     def forward(self, var, mode=None): # pylint: disable=unused-argument
         """Get image prediction given the current homographies"""
-        xy_grid = warp.get_normalized_pixel_grid_halfed(self.opt) if self.opt.halfsize else \
-            warp.get_normalized_pixel_grid(self.opt) # [:1]
+        xy_grid = self.warp.get_normalized_pixel_grid(crop=self.opt.halfsize)
         # warp grid according to warp_param.weight homographies for each image.
-        xy_grid_warped = warp.warp_grid(self.opt, xy_grid, self.warp_param.weight)
+        xy_grid_warped = self.warp.warp_grid(xy_grid, self.warp_param.weight)
         # get rgb image prediction for the warped 2d area
         var.rgb_warped = self.neural_image.forward(xy_grid_warped) # [B, HW, 3]
         # used for tensorboard visualisation

@@ -19,6 +19,8 @@ barf_c2f:                                                   # coarse-to-fine sch
 
 H: 360
 W: 480
+patch_H: 180
+patch_W: 240
 
 dataset: batch6                                             # directory containing images
 use_masks: true                                            # whether or not to utilize masks in loss calculation
@@ -27,8 +29,6 @@ halfsize: false                                             # whether to use sca
 data:                                                       # data options
     root:                                                   # root path to dataset
     dataset:                                                # dataset name
-    image_size: [360,480]                                   # input image sizes [height,width]
-    patch_crop: [180,180]                                   # crop size of image patches to align
     num_workers: 8                                          # number of parallel workers for data loading
     preload: false                                          # preload the entire dataset into the memory
     augment: {}                                             # data augmentation (training only)
