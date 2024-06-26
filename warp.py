@@ -8,8 +8,8 @@ class Warp:
 
     def __init__(self, opt):
         self.max_h = opt.H
-        self.max_w = opt.W
         self.crop_h = opt.patch_H
+        self.max_w = opt.W
         self.crop_w = opt.patch_W
         self.y_crop = (
             self.max_h // 2 - self.crop_h // 2, self.max_h // 2 + self.crop_h // 2
@@ -34,26 +34,38 @@ class Warp:
         """Create a pixel grid fitting to the output image width and height,
         which optionally can be cropped to fit the input image width and height"""
         # prepare grid dimensions
-        y_range = (
-            (torch.arange(
-                *(self.y_crop) if crop else self.max_h,
-                dtype=torch.float32,
-                device=self.device) + 0.5
-            )
-            / self.max_h * 2 - 1
-            ) * self.norm_h
-        x_range = (
-            (torch.arange(
-                *(self.x_crop) if crop else self.max_w,
-                dtype=torch.float32,
-                device=self.device) + 0.5
-            )
-            / self.max_h * 2 - 1
-            ) * self.norm_w
-        Y, X = torch.meshgrid(y_range, x_range)  # [H, W]
-        xy_grid = torch.stack([X, Y], dim=-1).view(-1, 2)  # [HW, 2]
-        xy_grid = xy_grid.repeat(self.batch_size, 1, 1)  # [B, HW, 2]
-        return xy_grid
+        if crop:
+            y_range = (
+                (torch.arange(
+                    *(self.y_crop),
+                    dtype=torch.float32,
+                    device=self.device) + 0.5
+                ) / self.max_h * 2 - 1) * self.norm_h
+            x_range = (
+                (torch.arange(
+                    *(self.x_crop),
+                    dtype=torch.float32,
+                    device=self.device) + 0.5
+                ) / self.max_w * 2 - 1) * self.norm_w
+            Y, X = torch.meshgrid(y_range, x_range)  # [H, W]
+            xy_grid = torch.stack([X, Y], dim=-1).view(-1, 2)  # [HW, 2]
+            xy_grid = xy_grid.repeat(self.batch_size, 1, 1)  # [B, HW, 2]
+            return xy_grid
+        else:
+            y_range = ((torch.arange(
+                    self.max_h,
+                    dtype=torch.float32,
+                    device=self.device) + 0.5
+                ) / self.max_h * 2 - 1) * self.norm_h
+            x_range = ((torch.arange(
+                    self.max_w,
+                    dtype=torch.float32,
+                    device=self.device) + 0.5
+                ) / self.max_w * 2 - 1) * self.norm_w
+            Y, X = torch.meshgrid(y_range, x_range)  # [H, W]
+            xy_grid = torch.stack([X, Y], dim=-1).view(-1, 2)  # [HW, 2]
+            xy_grid = xy_grid.repeat(self.batch_size, 1, 1)  # [B, HW, 2]
+            return xy_grid
 
     def warp_grid(self, xy_grid, warp):
         """Depending on given options, perform a transformation onto a grid or image."""
