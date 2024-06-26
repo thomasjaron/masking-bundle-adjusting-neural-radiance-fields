@@ -33,7 +33,6 @@ class Model(torch.nn.Module):
         self.batch_size = opt.batch_size
         self.dataset = opt.dataset
         os.makedirs(opt.output_path,exist_ok=True)
-        opt.H_crop, opt.W_crop = opt.data.patch_crop
         self.warp = Warp(opt)
         # load dataset
         self.image_raw = None
@@ -56,9 +55,8 @@ class Model(torch.nn.Module):
         self.timer = None
         self.warp_pert = None
         self.ep = self.it = self.vis_it = 0
-        self.histograms = None
 
-    def _prepare_images(self, halfsize=False, use_masks=False):
+    def _prepare_images(self, cropped=False, use_masks=False):
         """Load distorted and occluded images used for reconstruction."""
         image_tensors = []
         mask_tensors = []
@@ -72,11 +70,17 @@ class Model(torch.nn.Module):
             image_i = PIL.Image.open(i).convert('RGB')
             if use_masks:
                 mask_i = PIL.Image.open(m).convert('L') # grayscale
-                self.image_raw *= (torchvision_F.to_tensor(mask_i).to(self.opt.device) < 0.5).float()
-            if halfsize:
-                image_i.thumbnail((self.opt.W / 2, self.opt.H / 2), PIL.Image.Resampling.LANCZOS)
+                self.image_raw *= (
+                    torchvision_F.to_tensor(mask_i).to(self.opt.device) < 0.5
+                    ).float()
+            if cropped:
+                image_i.thumbnail(
+                        (self.opt.patch_W, self.opt.patch_H), PIL.Image.Resampling.LANCZOS
+                    )
                 if use_masks:
-                    mask_i.thumbnail((self.opt.W / 2, self.opt.H / 2), PIL.Image.Resampling.LANCZOS)
+                    mask_i.thumbnail(
+                        (self.opt.patch_W, self.opt.patch_H), PIL.Image.Resampling.LANCZOS
+                    )
             image_tensors.append(
                 torchvision_F.to_tensor(image_i).to(self.opt.device)
                 )
@@ -88,21 +92,12 @@ class Model(torch.nn.Module):
         if use_masks:
             self.mask_batches = torch.stack(mask_tensors) # [B, 1, H, W]
 
-    # def _prepare_histogram_normalized_images(self, halfsize=True):
-    #     normalized = []
-    #     for i in self.image_batches:
-    #         pil_image = torchvision_F.to_pil_image(i).convert('L')
-    #         pil_image = PIL.ImageOps.equalize(pil_image).convert('RGB')
-    #         normalized.append(torchvision_F.to_tensor(pil_image).to(self.opt.device))
-    #     self.histograms = torch.stack(normalized) # [B, 3, H, W]
-
     def load_dataset(self):
         """Load groundtruth input image into a tensor."""
         log.info("loading dataset...")
         image_raw = PIL.Image.open(f'data/planar/{self.dataset}/gt.png')
         self.image_raw = torchvision_F.to_tensor(image_raw).to(self.opt.device)
-        self._prepare_images(halfsize=self.opt.halfsize, use_masks=self.opt.use_masks)
-        # self._prepare_histogram_normalized_images(halfsize=True)
+        self._prepare_images(cropped=self.opt.use_cropped_images, use_masks=self.opt.use_masks)
 
     def build_networks(self):
         """Builds Network"""
@@ -229,7 +224,8 @@ class Model(torch.nn.Module):
         self.optim.step()
         # after train iteration
         if (self.it+1) % self.opt.freq.scalar==0:
-            self.log_scalars(var, loss, step=self.it+1, split="train")
+            if self.tb:
+                self.log_scalars(var, loss, step=self.it+1, split="train")
         if (self.it+1) % self.opt.freq.vis==0:
             self.visualize(var, step=self.it+1, split="train")
         self.it += 1
@@ -281,7 +277,8 @@ class Model(torch.nn.Module):
                 self.visualize(var,step=ep,split="val")
         for key in loss_val:
             loss_val[key] /= len(self.test_data)
-        self.log_scalars(opt,var,loss_val,step=ep,split="val")
+        if self.tb:
+            self.log_scalars(opt,var,loss_val,step=ep,split="val")
         # log.loss_val(loss_val.all)
 
     @torch.no_grad()
@@ -357,67 +354,43 @@ class Graph(torch.nn.Module):
         # represents the homographies for each input image
         self.warp_param = torch.nn.Embedding(self.batch_size, opt.warp.dof).to(opt.device)
         torch.nn.init.zeros_(self.warp_param.weight)
+        # Utility variables
+        self.h = self.opt.patch_H if self.opt.use_cropped_images else self.opt.H
+        self.w = self.opt.patch_W if self.opt.use_cropped_images else self.opt.W
 
     def forward(self, var, mode=None): # pylint: disable=unused-argument
         """Get image prediction given the current homographies"""
-        xy_grid = self.warp.get_normalized_pixel_grid(crop=self.opt.halfsize)
+        xy_grid = self.warp.get_normalized_pixel_grid(crop=self.opt.use_cropped_images)
         # warp grid according to warp_param.weight homographies for each image.
         xy_grid_warped = self.warp.warp_grid(xy_grid, self.warp_param.weight)
         # get rgb image prediction for the warped 2d area
         var.rgb_warped = self.neural_image.forward(xy_grid_warped) # [B, HW, 3]
         # used for tensorboard visualisation
-        h = self.opt.H / 2 if self.opt.halfsize else self.opt.H
-        w = self.opt.W / 2 if self.opt.halfsize else self.opt.W
         var.rgb_warped_map = var.rgb_warped.view(
-            self.batch_size, int(h), int(w), 3
+            self.batch_size, int(self.h), int(self.w), 3
             ).permute(0, 3, 1, 2) # [B, 3, H, W]
-
-        # pred_histograms = []
-        # for i in var.rgb_warped_map:
-        #     pil_image = torchvision_F.to_pil_image(i).convert('L')
-        #     pil_image = PIL.ImageOps.equalize(pil_image).convert('RGB')
-        #     pred_histograms.append(torchvision_F.to_tensor(pil_image).to(self.opt.device))
-        # var.rgb_warped_hist = torch.stack(pred_histograms).view(self.batch_size, 3, int(self.opt.H / 2 * self.opt.W / 2)).permute(0, 2, 1) # [B, 3, H, W]
-            
-        # var.rgb_warped_hist = var.rgb_warped.view(
-        #     self.batch_size, int(self.opt.H / 2), int(self.opt.W / 2), 3
-        #     ).permute(0, 3, 1, 2) # [B, 3, H, W]
         return var
 
     def compute_loss(self, var, mode=None): # pylint: disable=unused-argument
         """Compute Loss"""
         loss = edict()
         if self.opt.loss_weight.render is not None:
-            h = self.opt.H / 2 if self.opt.halfsize else self.opt.H
-            w = self.opt.W / 2 if self.opt.halfsize else self.opt.W
-            image_pert = var.image_pert.view(self.batch_size, 3, int(h * w)).permute(0, 2, 1) # pylint: disable=line-too-long
+            image_pert = var.image_pert.view(self.batch_size, 3, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long
             mask_pert = None
             if var.mask_pert is not None:
-                mask_pert = var.mask_pert.view(self.batch_size, 1, int(h * w)).permute(0, 2, 1) # pylint: disable=line-too-long
-            hist = None
-            # if var.histograms is not None:
-            #     hist = var.histograms.view(self.batch_size, 3, int(self.opt.H / 2 * self.opt.W / 2)).permute(0, 2, 1) # pylint: disable=line-too-long
-
-            # loss gets computed for difference between
-            # - previously calculated image patch (ground truth, var.image_pert)
-            # - current learned estimation (var.rgb_warped)
-            loss.render = self.mse_loss(var, image_pert, mask_pert, hist)
+                mask_pert = var.mask_pert.view(self.batch_size, 1, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long
+            loss.render = self.rgb_loss(var.rgb_warped, image_pert, mask_pert)
         return loss
 
-    def mse_loss(self,var,label=0, mask=None, hist=None):
-        """MSE Loss Function"""
-        if hist is not None:
-            loss1 = (var.rgb_warped_hist.contiguous() - hist)**2
-            # return loss.mean()
-        if mask is None:
-            loss = (var.rgb_warped.contiguous() - label)**2 * loss1.mean()
+    def rgb_loss(self, pred, labels, masks=None):
+        """Perform MSE on RGB color values and use masks if available"""
+        if masks is None:
+            loss = (pred.contiguous() - labels) ** 2
             return loss.mean()
-
-        masked_diff = (var.rgb_warped.contiguous() - label) * mask
-        masked_loss = masked_diff**2
-        mean_loss = masked_loss.sum() / mask.sum()  # Only average over unmasked elements
+        masked_diff = (pred.contiguous() - labels) * masks
+        masked_loss = masked_diff ** 2
+        mean_loss = masked_loss.sum() / masks.sum()  # Only average over unmasked elements
         return mean_loss
-
 
 # ============================ Neural Image Function ============================
 

@@ -118,7 +118,6 @@ def process_options(opt):
     assert isinstance(opt.gpu, int)
     opt.device = "cpu" if opt.cpu or not torch.cuda.is_available(
     ) else f"cuda:{opt.gpu}"
-    opt.H, opt.W = opt.data.image_size
 
 
 def save_options_file(opt):
