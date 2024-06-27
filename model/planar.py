@@ -22,6 +22,8 @@ import util_vis
 from util import log
 from warp import Warp
 
+import matplotlib.pyplot as plt
+
 # ============================ main engine for training and evaluation ============================
 
 class Model(torch.nn.Module):
@@ -38,6 +40,7 @@ class Model(torch.nn.Module):
         self.image_raw = None
         self.image_batches = None
         self.mask_batches = None
+        self.edge_tensors = None
         # build networks
         self.graph = None
         # setup optimizer
@@ -56,10 +59,11 @@ class Model(torch.nn.Module):
         self.warp_pert = None
         self.ep = self.it = self.vis_it = 0
 
-    def _prepare_images(self, cropped=False, use_masks=False):
+    def _prepare_images(self, cropped=False, use_masks=False, use_edges=True):
         """Load distorted and occluded images used for reconstruction."""
         image_tensors = []
         mask_tensors = []
+        edge_tensors = []
         image_paths = [
             f'data/planar/{self.dataset}/{i}.png' for i in range(self.batch_size)
         ]
@@ -91,13 +95,15 @@ class Model(torch.nn.Module):
         self.image_batches = torch.stack(image_tensors) # [B, 3, H, W]
         if use_masks:
             self.mask_batches = torch.stack(mask_tensors) # [B, 1, H, W]
+        if use_edges:
+            self.edge_tensors = self.sobel_and_blur(image_tensors) # [B, 1, H, W]
 
     def load_dataset(self):
         """Load groundtruth input image into a tensor."""
         log.info("loading dataset...")
         image_raw = PIL.Image.open(f'data/planar/{self.dataset}/gt.png')
         self.image_raw = torchvision_F.to_tensor(image_raw).to(self.opt.device)
-        self._prepare_images(cropped=self.opt.use_cropped_images, use_masks=self.opt.use_masks)
+        self._prepare_images(cropped=self.opt.use_cropped_images, use_masks=self.opt.use_masks, use_edges=self.opt.use_edges)
 
     def build_networks(self):
         """Builds Network"""
@@ -170,6 +176,7 @@ class Model(torch.nn.Module):
         var = edict(idx=torch.arange(self.batch_size))
         var.image_pert = self.image_batches
         var.mask_pert = self.mask_batches
+        var.edge_pert = self.edge_tensors
         # var.histograms = self.histograms
 
         # Training Loop
@@ -195,6 +202,72 @@ class Model(torch.nn.Module):
             self.tb.flush()
             self.tb.close()
         log.title("TRAINING DONE")
+
+    def sobel_and_blur(self, image_batches):
+        """Apply Sobel filter and blur to the images in image_batches."""
+        processed_images = []
+        for image in image_batches:
+            # Print the shape of the tensor before transposing
+            #print(f"Original tensor shape: {image.shape}")
+
+            if image.is_cuda:
+                image_np = image.detach().cpu().numpy()
+            else:
+                image_np = image.detach().numpy()
+            """    
+            image_np = np.transpose(image_np, (1, 2, 0))  # Assuming the tensor is in RGB format
+
+            # Display the original image using Matplotlib
+            plt.figure()
+            plt.imshow(image_np)
+            plt.title('Original Image')
+            plt.axis('off')
+            plt.show()
+            """
+            
+            #print(f"Shape after transpose: {image_np.shape}")
+            """"""
+            image_gray = cv2.cvtColor(np.transpose(image_np, (1, 2, 0)), cv2.COLOR_RGB2GRAY)
+
+            #Display the original image using Matplotlib
+            # plt.figure()
+            # plt.imshow(image_gray, cmap='gray')
+            # plt.title('Original Image')
+            # plt.axis('off')
+            # plt.show()
+
+            sobel_x = cv2.Sobel(image_gray, cv2.CV_64F, 1, 0, ksize=3)
+            # plt.figure()
+            # plt.imshow(sobel_x)
+            # plt.title('Original Image')
+            # plt.axis('off')
+            # plt.show()
+
+            sobel_y = cv2.Sobel(image_gray, cv2.CV_64F, 0, 1, ksize=3)
+            # plt.figure()
+            # plt.imshow(sobel_y)
+            # plt.title('Original Image')
+            # plt.axis('off')
+            # plt.show()
+
+            sobel = np.sqrt(sobel_x**2 + sobel_y**2)
+            # plt.figure()
+            # plt.imshow(sobel)
+            # plt.title('Original Image')
+            # plt.axis('off')
+            # plt.show()
+
+            sobel_blurred = cv2.GaussianBlur(sobel, (5, 5), 0)
+            # plt.figure()
+            # plt.imshow(sobel_blurred)
+            # plt.title('Original Image')
+            # plt.axis('off')
+            # plt.show()
+
+            sobel_blurred_tensor = torchvision_F.to_tensor(sobel_blurred).to(self.opt.device)
+            processed_images.append(sobel_blurred_tensor)
+
+        return torch.stack(processed_images)
 
     def summarize_loss(self, loss):
         """Summarize loss"""
@@ -377,20 +450,78 @@ class Graph(torch.nn.Module):
         if self.opt.loss_weight.render is not None:
             image_pert = var.image_pert.view(self.batch_size, 3, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long
             mask_pert = None
+            edge_pert = None
             if var.mask_pert is not None:
                 mask_pert = var.mask_pert.view(self.batch_size, 1, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long
-            loss.render = self.rgb_loss(var.rgb_warped, image_pert, mask_pert)
+            if var.edge_pert is not None:
+                edge_pert = var.edge_pert.view(self.batch_size, 1, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long                
+            loss.render = self.rgb_loss(var.rgb_warped, image_pert, mask_pert, edge_pert)
+
         return loss
 
-    def rgb_loss(self, pred, labels, masks=None):
+    def rgb_loss(self, pred, labels, masks=None, edge=None):
         """Perform MSE on RGB color values and use masks if available"""
+        # alpha = 0.2
+        # if masks is None:
+        #     loss = (pred.contiguous() - labels) ** 2
+        #     return loss.mean()
+        # # edge des generierten bildes muss gegen die losses aller edges gerechnet werden
+        # # something like mean_loss += edge_loss.mean()*alpha
+        # masked_diff = (pred.contiguous() - labels) * masks
+        # masked_loss = masked_diff ** 2
+        # mean_loss = masked_loss.sum() / masks.sum()  # Only average over unmasked elements
+        # return mean_loss
+        """Perform MSE on RGB color values and use masks if available, including edge loss."""
+        alpha = 0.2
+
+        # RGB Loss
         if masks is None:
-            loss = (pred.contiguous() - labels) ** 2
-            return loss.mean()
-        masked_diff = (pred.contiguous() - labels) * masks
-        masked_loss = masked_diff ** 2
-        mean_loss = masked_loss.sum() / masks.sum()  # Only average over unmasked elements
-        return mean_loss
+            rgb_loss = (pred.contiguous() - labels) ** 2
+            rgb_loss = rgb_loss.mean()
+        else:
+            masked_diff = (pred.contiguous() - labels) * masks
+            masked_loss = masked_diff ** 2
+            rgb_loss = masked_loss.sum() / masks.sum()  # Only average over unmasked elements
+
+        # Edge Loss
+        if edge is not None:
+            pred1 = Model.predict_entire_image(edge)
+            # if edge.is_cuda:
+            #     edge_cpu = edge.detach().cpu().numpy()
+            # else:
+            #     edge_cpu = edge.detach().numpy()
+            # print(f"pred: {edge_cpu.shape}")
+            # edge_cpu = edge_cpu[:3, :, :]
+            # edge_cpu = edge_cpu.astype(np.uint8)
+            # print(f"pred shape after change: {edge_cpu.shape}")
+
+            # plt.figure()
+            # plt.imshow(edge_cpu)
+            # plt.title('Original Image')
+            # plt.axis('off')
+            # plt.show()
+
+            # pred_gray = cv2.cvtColor(np.transpose(edge_cpu, (1, 2, 0)), cv2.COLOR_RGB2GRAY)
+            # sobel_x = cv2.Sobel(pred_gray, cv2.CV_64F, 1, 0, ksize=3)
+            # sobel_y = cv2.Sobel(pred_gray, cv2.CV_64F, 0, 1, ksize=3)
+            # sobel = np.sqrt(sobel_x**2 + sobel_y**2)
+            # sobel_blurred = cv2.GaussianBlur(sobel, (5, 5), 0)
+
+            # plt.figure()
+            # plt.imshow(sobel_blurred)
+            # plt.title('Original Image')
+            # plt.axis('off')
+            # plt.show()
+
+            edge_loss = (pred - edge) ** 2
+            edge_loss = edge_loss.mean()
+            print(f'Edge Loss is: {edge_loss}')
+        else:
+            edge_loss = 0
+
+        # Combine RGB and Edge Loss
+        total_loss = rgb_loss + alpha * edge_loss
+        return total_loss
 
 # ============================ Neural Image Function ============================
 
