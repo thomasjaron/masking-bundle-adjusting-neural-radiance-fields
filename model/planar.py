@@ -1,6 +1,5 @@
 """Contains Necessary classes for planar BARF"""
 import os
-import importlib
 import time
 import numpy as np
 import torch
@@ -16,6 +15,7 @@ import PIL.ImageOps
 import imageio
 import visdom
 import cv2
+import inputs
 
 import util
 import util_vis
@@ -34,10 +34,8 @@ class Model(torch.nn.Module):
         self.dataset = opt.dataset
         os.makedirs(opt.output_path,exist_ok=True)
         self.warp = Warp(opt)
-        # load dataset
-        self.image_raw = None
-        self.image_batches = None
-        self.mask_batches = None
+        # container for all images and image processings
+        self.images = None
         # build networks
         self.graph = None
         # setup optimizer
@@ -56,48 +54,21 @@ class Model(torch.nn.Module):
         self.warp_pert = None
         self.ep = self.it = self.vis_it = 0
 
-    def _prepare_images(self, cropped=False, use_masks=False):
-        """Load distorted and occluded images used for reconstruction."""
-        image_tensors = []
-        mask_tensors = []
+    def load_dataset(self):
+        """Load all images and ither inputs."""
+        log.info("loading dataset...")
         image_paths = [
             f'data/planar/{self.dataset}/{i}.png' for i in range(self.batch_size)
         ]
         mask_paths = [
             f'data/planar/{self.dataset}/{i}-m.png' for i in range(self.batch_size)
         ]
-        for i, m in zip(image_paths, mask_paths):
-            image_i = PIL.Image.open(i).convert('RGB')
-            if use_masks:
-                mask_i = PIL.Image.open(m).convert('L') # grayscale
-                self.image_raw *= (
-                    torchvision_F.to_tensor(mask_i).to(self.opt.device) < 0.5
-                    ).float()
-            if cropped:
-                image_i.thumbnail(
-                        (self.opt.patch_W, self.opt.patch_H), PIL.Image.Resampling.LANCZOS
-                    )
-                if use_masks:
-                    mask_i.thumbnail(
-                        (self.opt.patch_W, self.opt.patch_H), PIL.Image.Resampling.LANCZOS
-                    )
-            image_tensors.append(
-                torchvision_F.to_tensor(image_i).to(self.opt.device)
-                )
-            if use_masks:
-                mask_tensors.append(
-                    (torchvision_F.to_tensor(mask_i).to(self.opt.device) < 0.5).float()
-                    )
-        self.image_batches = torch.stack(image_tensors) # [B, 3, H, W]
-        if use_masks:
-            self.mask_batches = torch.stack(mask_tensors) # [B, 1, H, W]
-
-    def load_dataset(self):
-        """Load groundtruth input image into a tensor."""
-        log.info("loading dataset...")
-        image_raw = PIL.Image.open(f'data/planar/{self.dataset}/gt.png')
-        self.image_raw = torchvision_F.to_tensor(image_raw).to(self.opt.device)
-        self._prepare_images(cropped=self.opt.use_cropped_images, use_masks=self.opt.use_masks)
+        self.images = inputs.prepare_images(
+            self.opt,
+            fps_images=image_paths,
+            fps_masks=mask_paths if self.opt.use_masks else None,
+            fp_gt=f'data/planar/{self.dataset}/gt.png'
+            )
 
     def build_networks(self):
         """Builds Network"""
@@ -168,9 +139,7 @@ class Model(torch.nn.Module):
         self.graph.train()
         # add training images with masks to var
         var = edict(idx=torch.arange(self.batch_size))
-        var.image_pert = self.image_batches
-        var.mask_pert = self.mask_batches
-        # var.histograms = self.histograms
+        var.images = self.images
 
         # Training Loop
         var = util.move_to_device(var, self.opt.device)
@@ -225,7 +194,7 @@ class Model(torch.nn.Module):
         # after train iteration
         if (self.it+1) % self.opt.freq.scalar==0:
             if self.tb:
-                self.log_scalars(var, loss, step=self.it+1, split="train")
+                self.log_scalars(loss, step=self.it+1, split="train")
         if (self.it+1) % self.opt.freq.vis==0:
             self.visualize(var, step=self.it+1, split="train")
         self.it += 1
@@ -237,7 +206,7 @@ class Model(torch.nn.Module):
 
     def visualize_patches(self, warp_param):
         """"Visualize current homography estimation for each image"""
-        image_pil = torchvision_F.to_pil_image(self.image_raw).convert("RGBA")
+        image_pil = torchvision_F.to_pil_image(self.images.gt).convert("RGBA")
         draw_pil = PIL.Image.new("RGBA", image_pil.size, (0, 0, 0, 0))
         draw = PIL.ImageDraw.Draw(draw_pil)
         # compute corners of each homography
@@ -278,7 +247,7 @@ class Model(torch.nn.Module):
         for key in loss_val:
             loss_val[key] /= len(self.test_data)
         if self.tb:
-            self.log_scalars(opt,var,loss_val,step=ep,split="val")
+            self.log_scalars(opt,loss_val,step=ep,split="val")
         # log.loss_val(loss_val.all)
 
     @torch.no_grad()
@@ -290,7 +259,7 @@ class Model(torch.nn.Module):
         return image
 
     @torch.no_grad()
-    def log_scalars(self, _, loss, metric=None, step=0, split="train"):
+    def log_scalars(self, loss, metric=None, step=0, split="train"):
         """log scalars"""
         for key,value in loss.items():
             if key=="all":
@@ -313,7 +282,7 @@ class Model(torch.nn.Module):
         # vertically align the images and cast them to valid values [0...255]
         frame_cat = (torch.cat([frame, frame2], dim=1)*255).byte().permute(1, 2, 0).numpy()
         imageio.imsave(f"{self.vis_path}/{self.vis_it}.png", frame_cat)
-        # for indexx, p in enumerate(var.rgb_warped_map):
+        # for indexx, p in enumerate(var.rgb_prediction_map):
         #     pic = p.cpu().permute(1, 2, 0).numpy()
         #     imageio.imsave(f"{self.vis_path}/rgbwarped-{self.vis_it}-{indexx}.png", (pic * 255).astype(np.uint8))
         self.vis_it += 1
@@ -321,10 +290,10 @@ class Model(torch.nn.Module):
         if self.opt.tb:
             colors = self.box_colors
             util_vis.tb_image( # [B, 3, H, W]
-                self.opt, self.tb, self.it+1, "train", "image_pert", util_vis.color_border(var.image_pert, colors) # pylint: disable=line-too-long
+                self.opt, self.tb, self.it+1, "train", "image_pert", util_vis.color_border(var.images.rgb, colors) # pylint: disable=line-too-long
                 )
             util_vis.tb_image(
-                self.opt, self.tb, self.it+1, "train", "rgb_warped", util_vis.color_border((var.rgb_warped_map*255), colors) # pylint: disable=line-too-long
+                self.opt, self.tb, self.it+1, "train", "rgb_warped", util_vis.color_border((var.rgb_prediction_map*255), colors) # pylint: disable=line-too-long
                 )
             util_vis.tb_image(
                 self.opt, self.tb, self.it+1, "train", "image_boxes", frame[None]
@@ -364,9 +333,9 @@ class Graph(torch.nn.Module):
         # warp grid according to warp_param.weight homographies for each image.
         xy_grid_warped = self.warp.warp_grid(xy_grid, self.warp_param.weight)
         # get rgb image prediction for the warped 2d area
-        var.rgb_warped = self.neural_image.forward(xy_grid_warped) # [B, HW, 3]
+        var.rgb_prediction = self.neural_image.forward(xy_grid_warped) # [B, HW, 3]
         # used for tensorboard visualisation
-        var.rgb_warped_map = var.rgb_warped.view(
+        var.rgb_prediction_map = var.rgb_prediction.view(
             self.batch_size, int(self.h), int(self.w), 3
             ).permute(0, 3, 1, 2) # [B, 3, H, W]
         return var
@@ -375,11 +344,11 @@ class Graph(torch.nn.Module):
         """Compute Loss"""
         loss = edict()
         if self.opt.loss_weight.render is not None:
-            image_pert = var.image_pert.view(self.batch_size, 3, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long
+            image_pert = var.images.rgb.view(self.batch_size, 3, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long
             mask_pert = None
-            if var.mask_pert is not None:
-                mask_pert = var.mask_pert.view(self.batch_size, 1, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long
-            loss.render = self.rgb_loss(var.rgb_warped, image_pert, mask_pert)
+            if var.images.masks is not None:
+                mask_pert = var.images.masks.view(self.batch_size, 1, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long
+            loss.render = self.rgb_loss(var.rgb_prediction, image_pert, mask_pert)
         return loss
 
     def rgb_loss(self, pred, labels, masks=None):
