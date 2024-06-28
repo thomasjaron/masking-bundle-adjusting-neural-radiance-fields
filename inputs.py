@@ -9,6 +9,10 @@ import imageio
 import torchvision.transforms.functional as torchvision_F
 from easydict import EasyDict as edict
 
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+
 def load_images(fps, opt, mode='RGB', invert_gray=False):
     """Loads a set of images into a tensor from a list of file pointers.
     Given the model options, also scales these images and saves them to
@@ -64,14 +68,41 @@ def compute_derivative_x(images, device):
     # device = string
     return 0
 
-def compute_edges(images, device):
-    """Compute an edge image from a tensor holding images."""
-    # TODO
-    # Images = tensor of size [B, 3, H, W]
-    # device = string
-    return 0
+def compute_edges(rgb, device):
+    """Compute an edge image from a list of image paths."""
+    #print(rgb.size())
+    processed_images = []
+    for image in rgb:
+        image = image.detach().cpu().numpy()
+        image = np.transpose(image, (1, 2, 0))
 
-def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None):
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image_tensor = torchvision_F.to_tensor(image).to(device)
+
+        if image_tensor.is_cuda:
+            image_np = image_tensor.detach().cpu().numpy()
+        else:
+            image_np = image_tensor.detach().numpy()
+
+        image_gray = cv2.cvtColor(np.transpose(image_np, (1, 2, 0)), cv2.COLOR_RGB2GRAY)
+        sobel_x = cv2.Sobel(image_gray, cv2.CV_64F, 1, 0, ksize=3)
+        sobel_y = cv2.Sobel(image_gray, cv2.CV_64F, 0, 1, ksize=3)
+        sobel = np.sqrt(sobel_x**2 + sobel_y**2)
+        sobel_blurred = cv2.GaussianBlur(sobel, (5, 5), 0)
+        sobel_blurred_tensor = torchvision_F.to_tensor(sobel_blurred).to(device)
+        processed_images.append(sobel_blurred_tensor)
+
+
+        # plt.figure()
+        # plt.imshow(sobel_blurred)
+        # plt.title('Sobel')
+        # plt.axis('off')
+        # plt.show()
+
+    return torch.stack(processed_images)
+
+
+def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, edges=True):
     """Load distorted and occluded images used for reconstruction.
     This function assumes a 
     """
@@ -87,7 +118,8 @@ def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None):
     inputs.gray = load_images(fps_images, opt, mode='L')
     inputs.histograms = compute_histograms(inputs.rgb, opt.device)
     inputs.histograms_normalized = compute_histograms(inputs.rgb, opt.device)
-    inputs.edges = compute_edges(inputs.rgb, opt.device)
+    if edges:
+        inputs.edges = compute_edges(inputs.rgb, opt.device)
     inputs.derivative_x = compute_derivative_x(inputs.rgb, opt.device)
     inputs.derivative_y = compute_derivative_y(inputs.rgb, opt.device)
 

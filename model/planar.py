@@ -57,7 +57,7 @@ class Model(torch.nn.Module):
         self.ep = self.it = self.vis_it = 0
 
     def load_dataset(self):
-        """Load all images and ither inputs."""
+        """Load all images and other inputs."""
         log.info("loading dataset...")
         image_paths = [
             f'data/planar/{self.dataset}/{i}.png' for i in range(self.batch_size)
@@ -69,8 +69,14 @@ class Model(torch.nn.Module):
             self.opt,
             fps_images=image_paths,
             fps_masks=mask_paths if self.opt.use_masks else None,
-            fp_gt=f'data/planar/{self.dataset}/gt.png'
+            fp_gt=f'data/planar/{self.dataset}/gt.png',
+            edges = True if self.opt.use_edges else None
             )
+        # plt.figure()
+        # plt.imshow(images.edges)
+        # plt.title('Original Image')
+        # plt.axis('off')
+        # plt.show()
 
     def build_networks(self):
         """Builds Network"""
@@ -166,72 +172,6 @@ class Model(torch.nn.Module):
             self.tb.flush()
             self.tb.close()
         log.title("TRAINING DONE")
-
-    def sobel_and_blur(self, image_batches):
-        """Apply Sobel filter and blur to the images in image_batches."""
-        processed_images = []
-        for image in image_batches:
-            # Print the shape of the tensor before transposing
-            #print(f"Original tensor shape: {image.shape}")
-
-            if image.is_cuda:
-                image_np = image.detach().cpu().numpy()
-            else:
-                image_np = image.detach().numpy()
-            """    
-            image_np = np.transpose(image_np, (1, 2, 0))  # Assuming the tensor is in RGB format
-
-            # Display the original image using Matplotlib
-            plt.figure()
-            plt.imshow(image_np)
-            plt.title('Original Image')
-            plt.axis('off')
-            plt.show()
-            """
-            
-            #print(f"Shape after transpose: {image_np.shape}")
-            """"""
-            image_gray = cv2.cvtColor(np.transpose(image_np, (1, 2, 0)), cv2.COLOR_RGB2GRAY)
-
-            #Display the original image using Matplotlib
-            # plt.figure()
-            # plt.imshow(image_gray, cmap='gray')
-            # plt.title('Original Image')
-            # plt.axis('off')
-            # plt.show()
-
-            sobel_x = cv2.Sobel(image_gray, cv2.CV_64F, 1, 0, ksize=3)
-            # plt.figure()
-            # plt.imshow(sobel_x)
-            # plt.title('Original Image')
-            # plt.axis('off')
-            # plt.show()
-
-            sobel_y = cv2.Sobel(image_gray, cv2.CV_64F, 0, 1, ksize=3)
-            # plt.figure()
-            # plt.imshow(sobel_y)
-            # plt.title('Original Image')
-            # plt.axis('off')
-            # plt.show()
-
-            sobel = np.sqrt(sobel_x**2 + sobel_y**2)
-            # plt.figure()
-            # plt.imshow(sobel)
-            # plt.title('Original Image')
-            # plt.axis('off')
-            # plt.show()
-
-            sobel_blurred = cv2.GaussianBlur(sobel, (5, 5), 0)
-            # plt.figure()
-            # plt.imshow(sobel_blurred)
-            # plt.title('Original Image')
-            # plt.axis('off')
-            # plt.show()
-
-            sobel_blurred_tensor = torchvision_F.to_tensor(sobel_blurred).to(self.opt.device)
-            processed_images.append(sobel_blurred_tensor)
-
-        return torch.stack(processed_images)
 
     def summarize_loss(self, loss):
         """Summarize loss"""
@@ -402,10 +342,10 @@ class Graph(torch.nn.Module):
         xy_grid_warped = self.warp.warp_grid(xy_grid, self.warp_param.weight)
         # get rgb image prediction for the warped 2d area
         var.rgb_prediction = self.neural_image.forward(xy_grid_warped) # [B, HW, 3]
+        #print(var.rgb_prediction.size())
         # used for tensorboard visualisation
-        var.rgb_prediction_map = var.rgb_prediction.view(
-            self.batch_size, int(self.h), int(self.w), 3
-            ).permute(0, 3, 1, 2) # [B, 3, H, W]
+        var.rgb_prediction_map = var.rgb_prediction.view(self.batch_size, int(self.h), int(self.w), 3).permute(0, 3, 1, 2) # [B, 3, H, W]
+        #print(var.rgb_prediction_map.size())
         return var
 
     def compute_loss(self, var, mode=None): # pylint: disable=unused-argument
@@ -415,31 +355,17 @@ class Graph(torch.nn.Module):
             image_pert = var.images.rgb.view(self.batch_size, 3, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long
             mask_pert = None
             edge_pert = None
-            if var.mask_pert is not None:
-                mask_pert = var.mask_pert.view(self.batch_size, 1, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long
-            if var.edge_pert is not None:
-                edge_pert = var.edge_pert.view(self.batch_size, 1, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long                
-            loss.render = self.rgb_loss(var.rgb_warped, image_pert, mask_pert, edge_pert)
-
             if var.images.masks is not None:
                 mask_pert = var.images.masks.view(self.batch_size, 1, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long
-            loss.render = self.rgb_loss(var.rgb_prediction, image_pert, mask_pert)
+            if var.images.edges is not None:
+                edge_pert = var.images.edges.view(self.batch_size, 1, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long 
+            loss.render = self.rgb_loss(var.rgb_prediction, image_pert, mask_pert, edge_pert)
+             
         return loss
 
     def rgb_loss(self, pred, labels, masks=None, edge=None):
-        """Perform MSE on RGB color values and use masks if available"""
-        # alpha = 0.2
-        # if masks is None:
-        #     loss = (pred.contiguous() - labels) ** 2
-        #     return loss.mean()
-        # # edge des generierten bildes muss gegen die losses aller edges gerechnet werden
-        # # something like mean_loss += edge_loss.mean()*alpha
-        # masked_diff = (pred.contiguous() - labels) * masks
-        # masked_loss = masked_diff ** 2
-        # mean_loss = masked_loss.sum() / masks.sum()  # Only average over unmasked elements
-        # return mean_loss
         """Perform MSE on RGB color values and use masks if available, including edge loss."""
-        alpha = 0.2
+        alpha = 0.01
 
         # RGB Loss
         if masks is None:
@@ -449,45 +375,45 @@ class Graph(torch.nn.Module):
             masked_diff = (pred.contiguous() - labels) * masks
             masked_loss = masked_diff ** 2
             rgb_loss = masked_loss.sum() / masks.sum()  # Only average over unmasked elements
-
         # Edge Loss
+        edge_loss = 0
         if edge is not None:
-            pred1 = Model.predict_entire_image(edge)
-            # if edge.is_cuda:
-            #     edge_cpu = edge.detach().cpu().numpy()
-            # else:
-            #     edge_cpu = edge.detach().numpy()
-            # print(f"pred: {edge_cpu.shape}")
-            # edge_cpu = edge_cpu[:3, :, :]
-            # edge_cpu = edge_cpu.astype(np.uint8)
-            # print(f"pred shape after change: {edge_cpu.shape}")
+            print(f'pred: {pred.size()}')
+            print(f'mask: {masks.size()}')
+            pred_reshaped = pred.view(self.batch_size, self.h, self.w, 3).permute(0, 3, 1, 2)  # Reshape to [B, 3, H*W]
+            mask_reshaped = masks.view(self.batch_size, self.h, self.w, 1).permute(0, 3, 1, 2)  # Reshape to [B, 3, H*W]
+            #single_mask = mask_reshaped.detach().cpu().numpy()
 
-            # plt.figure()
-            # plt.imshow(edge_cpu)
-            # plt.title('Original Image')
-            # plt.axis('off')
-            # plt.show()
+            for i in range(len(pred)):  # Iterate over the length of pred
+                single_pred = pred_reshaped[i].unsqueeze(0)  # Add batch dimension back
+                pred_edges = inputs.compute_edges(single_pred, self.opt.device)  # Compute edges for single_pred
+                single_mask = mask_reshaped[i].unsqueeze(0)  # Add batch dimension back
+                mask_edges = inputs.compute_edges(single_mask, self.opt.device)  # Compute edges for single_pred
+                image = mask_edges.detach().cpu().numpy()
+                image = image.squeeze()
+                #print(image.size())
+                plt.figure()
+                plt.imshow(image)
+                plt.title('mask')
+                plt.axis('off')
+                plt.show()
 
-            # pred_gray = cv2.cvtColor(np.transpose(edge_cpu, (1, 2, 0)), cv2.COLOR_RGB2GRAY)
-            # sobel_x = cv2.Sobel(pred_gray, cv2.CV_64F, 1, 0, ksize=3)
-            # sobel_y = cv2.Sobel(pred_gray, cv2.CV_64F, 0, 1, ksize=3)
-            # sobel = np.sqrt(sobel_x**2 + sobel_y**2)
-            # sobel_blurred = cv2.GaussianBlur(sobel, (5, 5), 0)
+                for j in range(len(edge)):
+                    # Iterate over the length of edge to compare prediction with every edged image
+                    single_edge = edge[j]
+                    pred_edges_reshaped = pred_edges.view(-1, 1)  # Flatten to match single_edge shape
+                    single_edge_loss = ((pred_edges_reshaped - single_edge) ** 2).mean()
+                    edge_loss += single_edge_loss
 
-            # plt.figure()
-            # plt.imshow(sobel_blurred)
-            # plt.title('Original Image')
-            # plt.axis('off')
-            # plt.show()
-
-            edge_loss = (pred - edge) ** 2
-            edge_loss = edge_loss.mean()
-            print(f'Edge Loss is: {edge_loss}')
-        else:
-            edge_loss = 0
-
-        # Combine RGB and Edge Loss
+            edge_loss /= (len(pred) * len(edge))  # Average the edge loss over the batch and edge length
+        print(f'Edge Loss is: {edge_loss}')
         total_loss = rgb_loss + alpha * edge_loss
+        print(f'total loss: {total_loss}')
+        # plt.figure()
+        # plt.imshow(image.transpose(1, 2, 0))
+        # plt.title('mask')
+        # plt.axis('off')
+        # plt.show()
         return total_loss
 
 # ============================ Neural Image Function ============================
