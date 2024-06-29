@@ -365,7 +365,7 @@ class Graph(torch.nn.Module):
 
     def rgb_loss(self, pred, labels, masks=None, edge=None):
         """Perform MSE on RGB color values and use masks if available, including edge loss."""
-        alpha = 0.01
+        alpha = 0.2
 
         # RGB Loss
         if masks is None:
@@ -378,42 +378,49 @@ class Graph(torch.nn.Module):
         # Edge Loss
         edge_loss = 0
         if edge is not None:
-            print(f'pred: {pred.size()}')
-            print(f'mask: {masks.size()}')
+            # height, width = self.h, self.w #uncomment for plt.imshow
+            #Change Shape of Prediction and Masks to use compute_edge function
             pred_reshaped = pred.view(self.batch_size, self.h, self.w, 3).permute(0, 3, 1, 2)  # Reshape to [B, 3, H*W]
             mask_reshaped = masks.view(self.batch_size, self.h, self.w, 1).permute(0, 3, 1, 2)  # Reshape to [B, 3, H*W]
-            #single_mask = mask_reshaped.detach().cpu().numpy()
 
             for i in range(len(pred)):  # Iterate over the length of pred
                 single_pred = pred_reshaped[i].unsqueeze(0)  # Add batch dimension back
                 pred_edges = inputs.compute_edges(single_pred, self.opt.device)  # Compute edges for single_pred
                 single_mask = mask_reshaped[i].unsqueeze(0)  # Add batch dimension back
                 mask_edges = inputs.compute_edges(single_mask, self.opt.device)  # Compute edges for single_pred
-                image = mask_edges.detach().cpu().numpy()
-                image = image.squeeze()
-                #print(image.size())
-                plt.figure()
-                plt.imshow(image)
-                plt.title('mask')
-                plt.axis('off')
-                plt.show()
 
                 for j in range(len(edge)):
-                    # Iterate over the length of edge to compare prediction with every edged image
-                    single_edge = edge[j]
-                    pred_edges_reshaped = pred_edges.view(-1, 1)  # Flatten to match single_edge shape
-                    single_edge_loss = ((pred_edges_reshaped - single_edge) ** 2).mean()
-                    edge_loss += single_edge_loss
+                    single_edge = edge[j].unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions back
+                    pred_edges_resized = torch_F.interpolate(pred_edges, size=single_edge.shape[2:], mode='bilinear', align_corners=False)
+                    edge_diff = (pred_edges_resized - single_edge) ** 2
 
+                    """
+                    VISUALIZING SUBTRACTED EDGES
+                    edge_diff_np = edge_diff.detach().cpu().numpy().squeeze()
+                    if edge_diff_np.ndim == 4:
+                        edge_diff_np = edge_diff_np[0, 0]  # Select the first batch and channel
+                    if edge_diff_np.ndim == 1:
+                        edge_diff_np = edge_diff_np.reshape(height, width)
+                    print(f'edge_diff final shape for imshow: {edge_diff_np.shape}')
+                    plt.figure()
+                    plt.imshow(edge_diff_np, cmap='gray')
+                    plt.title('Edge Difference')
+                    plt.axis('off')
+                    plt.show()
+                    image = edge[j].detach().cpu().numpy(
+                    if image.ndim == 3:
+                        image = image.squeeze()
+                    plt.figure()
+                    plt.imshow(image, cmap='gray')
+                    plt.title('Edge Image')
+                    plt.axis('off')
+                    plt.show()
+                    """
+
+
+                    edge_loss += edge_diff.mean()
             edge_loss /= (len(pred) * len(edge))  # Average the edge loss over the batch and edge length
-        print(f'Edge Loss is: {edge_loss}')
         total_loss = rgb_loss + alpha * edge_loss
-        print(f'total loss: {total_loss}')
-        # plt.figure()
-        # plt.imshow(image.transpose(1, 2, 0))
-        # plt.title('mask')
-        # plt.axis('off')
-        # plt.show()
         return total_loss
 
 # ============================ Neural Image Function ============================

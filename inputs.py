@@ -92,9 +92,8 @@ def compute_edges(rgb, device):
         sobel_blurred_tensor = torchvision_F.to_tensor(sobel_blurred).to(device)
         processed_images.append(sobel_blurred_tensor)
 
-
         # plt.figure()
-        # plt.imshow(sobel_blurred)
+        # plt.imshow(sobel_blurred, cmap='gray')
         # plt.title('Sobel')
         # plt.axis('off')
         # plt.show()
