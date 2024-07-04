@@ -72,11 +72,6 @@ class Model(torch.nn.Module):
             fp_gt=f'data/planar/{self.dataset}/gt.png',
             edges = True if self.opt.use_edges else None
             )
-        # plt.figure()
-        # plt.imshow(images.edges)
-        # plt.title('Original Image')
-        # plt.axis('off')
-        # plt.show()
 
     def build_networks(self):
         """Builds Network"""
@@ -334,6 +329,9 @@ class Graph(torch.nn.Module):
         # Utility variables
         self.h = self.opt.patch_H if self.opt.use_cropped_images else self.opt.H
         self.w = self.opt.patch_W if self.opt.use_cropped_images else self.opt.W
+        # Iterations
+        self.max_iter = opt.max_iter
+        self.it = 0
 
     def forward(self, var, mode=None): # pylint: disable=unused-argument
         """Get image prediction given the current homographies"""
@@ -365,8 +363,6 @@ class Graph(torch.nn.Module):
 
     def rgb_loss(self, pred, labels, masks=None, edge=None):
         """Perform MSE on RGB color values and use masks if available, including edge loss."""
-        alpha = 0.2
-
         # RGB Loss
         if masks is None:
             rgb_loss = (pred.contiguous() - labels) ** 2
@@ -375,52 +371,57 @@ class Graph(torch.nn.Module):
             masked_diff = (pred.contiguous() - labels) * masks
             masked_loss = masked_diff ** 2
             rgb_loss = masked_loss.sum() / masks.sum()  # Only average over unmasked elements
+
+
+        """"""
         # Edge Loss
+        alpha_initial = 0.2
+        alpha_final = 0.8
+        # Compute the dynamic alpha value
+        self.it += 1
+        alpha = alpha_initial + (alpha_final - alpha_initial) * (self.it / self.max_iter)
+        rgb_weight = 1 - alpha
         edge_loss = 0
+
+
         if edge is not None:
-            # height, width = self.h, self.w #uncomment for plt.imshow
-            #Change Shape of Prediction and Masks to use compute_edge function
+
+            # Change Shape of Prediction and Masks to use compute_edge function
             pred_reshaped = pred.view(self.batch_size, self.h, self.w, 3).permute(0, 3, 1, 2)  # Reshape to [B, 3, H*W]
             mask_reshaped = masks.view(self.batch_size, self.h, self.w, 1).permute(0, 3, 1, 2)  # Reshape to [B, 3, H*W]
+
 
             for i in range(len(pred)):  # Iterate over the length of pred
                 single_pred = pred_reshaped[i].unsqueeze(0)  # Add batch dimension back
                 pred_edges = inputs.compute_edges(single_pred, self.opt.device)  # Compute edges for single_pred
-                single_mask = mask_reshaped[i].unsqueeze(0)  # Add batch dimension back
-                mask_edges = inputs.compute_edges(single_mask, self.opt.device)  # Compute edges for single_pred
+
 
                 for j in range(len(edge)):
+                    single_mask = mask_reshaped[j].unsqueeze(0)  # Add batch dimension back
+                    single_mask = torch.from_numpy(cv2.GaussianBlur(single_mask.detach().cpu().numpy().squeeze(), (5, 5), 0)).to(self.opt.device)
+                    single_mask = single_mask.view(1, 1, self.h * self.w, 1)
+
+
                     single_edge = edge[j].unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions back
+                    single_edge_final = single_edge * single_mask
                     pred_edges_resized = torch_F.interpolate(pred_edges, size=single_edge.shape[2:], mode='bilinear', align_corners=False)
-                    edge_diff = (pred_edges_resized - single_edge) ** 2
+                    edge_diff = (pred_edges_resized - single_edge_final) ** 2
 
-                    """
-                    VISUALIZING SUBTRACTED EDGES
-                    edge_diff_np = edge_diff.detach().cpu().numpy().squeeze()
-                    if edge_diff_np.ndim == 4:
-                        edge_diff_np = edge_diff_np[0, 0]  # Select the first batch and channel
-                    if edge_diff_np.ndim == 1:
-                        edge_diff_np = edge_diff_np.reshape(height, width)
-                    print(f'edge_diff final shape for imshow: {edge_diff_np.shape}')
-                    plt.figure()
-                    plt.imshow(edge_diff_np, cmap='gray')
-                    plt.title('Edge Difference')
-                    plt.axis('off')
-                    plt.show()
-                    image = edge[j].detach().cpu().numpy(
-                    if image.ndim == 3:
-                        image = image.squeeze()
-                    plt.figure()
-                    plt.imshow(image, cmap='gray')
-                    plt.title('Edge Image')
-                    plt.axis('off')
-                    plt.show()
-                    """
-
-
+                    # single_edge_final_np = edge_diff.squeeze().detach().cpu().numpy()
+                    # single_edge_final_np = single_edge_final_np.reshape(self.h, self.w)
+                    # plt.imshow(single_edge_final_np, cmap='gray')
+                    # plt.title('Single Edge Final')
+                    # plt.axis('off')
+                    # plt.show()
+                            
                     edge_loss += edge_diff.mean()
+                    
             edge_loss /= (len(pred) * len(edge))  # Average the edge loss over the batch and edge length
-        total_loss = rgb_loss + alpha * edge_loss
+        total_loss = rgb_weight * rgb_loss + alpha * edge_loss
+        print(f"Edge loss is: {edge_loss}")
+        print(f"RGB loss is: {rgb_loss}")
+        print(f"total loss is: {total_loss}")
+
         return total_loss
 
 # ============================ Neural Image Function ============================
