@@ -375,8 +375,8 @@ class Graph(torch.nn.Module):
 
         """"""
         # Edge Loss
-        alpha_initial = 0.2
-        alpha_final = 0.8
+        alpha_initial = 1
+        alpha_final = 0.9
         # Compute the dynamic alpha value
         self.it += 1
         alpha = alpha_initial + (alpha_final - alpha_initial) * (self.it / self.max_iter)
@@ -418,6 +418,7 @@ class Graph(torch.nn.Module):
                     
             edge_loss /= (len(pred) * len(edge))  # Average the edge loss over the batch and edge length
         total_loss = rgb_weight * rgb_loss + alpha * edge_loss
+        #total_loss = edge_loss
         print(f"Edge loss is: {edge_loss}")
         print(f"RGB loss is: {rgb_loss}")
         print(f"total loss is: {total_loss}")
