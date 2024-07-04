@@ -418,7 +418,6 @@ class Graph(torch.nn.Module):
                     
             edge_loss /= (len(pred) * len(edge))  # Average the edge loss over the batch and edge length
         total_loss = rgb_weight * rgb_loss + alpha * edge_loss
-        #total_loss = edge_loss
         print(f"Edge loss is: {edge_loss}")
         print(f"RGB loss is: {rgb_loss}")
         print(f"total loss is: {total_loss}")
