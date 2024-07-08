@@ -375,7 +375,7 @@ class Graph(torch.nn.Module):
 
         """"""
         # Edge Loss
-        alpha_initial = 1
+        alpha_initial = 1.0
         alpha_final = 0.9
         # Compute the dynamic alpha value
         self.it += 1

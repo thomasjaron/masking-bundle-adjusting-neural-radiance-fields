@@ -117,8 +117,7 @@ def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, edges=True)
     inputs.gray = load_images(fps_images, opt, mode='L')
     inputs.histograms = compute_histograms(inputs.rgb, opt.device)
     inputs.histograms_normalized = compute_histograms(inputs.rgb, opt.device)
-    if edges:
-        inputs.edges = compute_edges(inputs.rgb, opt.device)
+    inputs.edges = compute_edges(inputs.rgb, opt.device) if edges else None
     inputs.derivative_x = compute_derivative_x(inputs.rgb, opt.device)
     inputs.derivative_y = compute_derivative_y(inputs.rgb, opt.device)
 

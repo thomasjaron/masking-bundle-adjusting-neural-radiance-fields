@@ -22,7 +22,7 @@ W: 480
 patch_H: 180
 patch_W: 240
 
-dataset: batch7                                             # directory containing images
+dataset: batch9                                             # directory containing images
 use_masks: True                                             # whether or not to utilize masks in loss calculation
 use_edges: True                                             # whether to use sobel filter to align edges
 use_cropped_images: True                                    # whether to use scaled down inputs for testing purposes or not
