@@ -375,11 +375,9 @@ class Graph(torch.nn.Module):
 
         """"""
         # Edge Loss
-        alpha_initial = 1.0
-        alpha_final = 0.9
-        # Compute the dynamic alpha value
+        # Compute the dynamic alpha value with init and final from options and 
         self.it += 1
-        alpha = alpha_initial + (alpha_final - alpha_initial) * (self.it / self.max_iter)
+        alpha = self.opt.alpha_initial + (self.opt.alpha_final - self.opt.alpha_initial) * (self.it / self.max_iter)
         rgb_weight = 1 - alpha
         edge_loss = 0
 
@@ -406,21 +404,12 @@ class Graph(torch.nn.Module):
                     single_edge_final = single_edge * single_mask
                     pred_edges_resized = torch_F.interpolate(pred_edges, size=single_edge.shape[2:], mode='bilinear', align_corners=False)
                     edge_diff = (pred_edges_resized - single_edge_final) ** 2
-
-                    # single_edge_final_np = edge_diff.squeeze().detach().cpu().numpy()
-                    # single_edge_final_np = single_edge_final_np.reshape(self.h, self.w)
-                    # plt.imshow(single_edge_final_np, cmap='gray')
-                    # plt.title('Single Edge Final')
-                    # plt.axis('off')
-                    # plt.show()
-                            
-                    edge_loss += edge_diff.mean()
                     
             edge_loss /= (len(pred) * len(edge))  # Average the edge loss over the batch and edge length
         total_loss = rgb_weight * rgb_loss + alpha * edge_loss
-        print(f"Edge loss is: {edge_loss}")
-        print(f"RGB loss is: {rgb_loss}")
-        print(f"total loss is: {total_loss}")
+        # print(f"Edge loss is: {edge_loss}")
+        # print(f"RGB loss is: {rgb_loss}")
+        # print(f"total loss is: {total_loss}")
 
         return total_loss
 

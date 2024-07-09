@@ -25,6 +25,8 @@ patch_W: 240
 dataset: batch9                                             # directory containing images
 use_masks: True                                             # whether or not to utilize masks in loss calculation
 use_edges: True                                             # whether to use sobel filter to align edges
+alpha_initial: 1.0                                         # configuring alpha weight, loss = rbg_weight * rgb_loss + alpha * edge_loss
+alpha_final: 0.9                                           # rgb_weight + alpha = 1                                      
 use_cropped_images: True                                    # whether to use scaled down inputs for testing purposes or not
 
 data:                                                       # data options
@@ -49,7 +51,7 @@ warp:                                                       # image warping opti
     dof: 8                                                  # degrees of freedom of the warp function
     noise_h: 0.1                                            # scale of pre-generated warp perturbation (homography)
     noise_t: 0.2                                            # scale of pre-generated warp perturbation (translation)
-    fix_first: true                                         # fix the first patch for uniqueness of solution
+    fix_first: false                                         # fix the first patch for uniqueness of solution
 
 
 loss_weight:                                                # loss weights (in log scale)
