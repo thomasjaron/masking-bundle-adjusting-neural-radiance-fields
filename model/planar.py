@@ -340,78 +340,45 @@ class Graph(torch.nn.Module):
         xy_grid_warped = self.warp.warp_grid(xy_grid, self.warp_param.weight)
         # get rgb image prediction for the warped 2d area
         var.rgb_prediction = self.neural_image.forward(xy_grid_warped) # [B, HW, 3]
-        #print(var.rgb_prediction.size())
-        # used for tensorboard visualisation
         var.rgb_prediction_map = var.rgb_prediction.view(self.batch_size, int(self.h), int(self.w), 3).permute(0, 3, 1, 2) # [B, 3, H, W]
-        #print(var.rgb_prediction_map.size())
+        var.edge_prediction = inputs.compute_edges(var.rgb_prediction_map, self.opt.device) # [B, 3, H, W]
         return var
 
     def compute_loss(self, var, mode=None): # pylint: disable=unused-argument
         """Compute Loss"""
         loss = edict()
+        # Influence factor for edge alignment and rgb alignment in loss
+        alpha = self.opt.alpha_initial + (self.opt.alpha_final - self.opt.alpha_initial) * (self.it / self.max_iter)
+
         if self.opt.loss_weight.render is not None:
-            image_pert = var.images.rgb.view(self.batch_size, 3, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long
-            mask_pert = None
-            edge_pert = None
-            if var.images.masks is not None:
-                mask_pert = var.images.masks.view(self.batch_size, 1, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long
-            if var.images.edges is not None:
-                edge_pert = var.images.edges.view(self.batch_size, 1, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long 
-            loss.render = self.rgb_loss(var.rgb_prediction, image_pert, mask_pert, edge_pert)
-             
+            rgb_loss = self.mse_loss(
+                var.rgb_prediction_map,
+                var.images.rgb,
+                var.images.masks)
+            edge_loss = self.mse_loss(
+                var.edge_prediction,
+                var.images.edges,
+                var.images.masks_eroded)
+            loss.render = \
+                (1 - alpha) * rgb_loss + \
+                (alpha) * edge_loss
+        
+        # if not self.it % 100:
+        #     print(f"Edge loss is: {edge_loss}")
+        #     print(f"RGB loss is: {rgb_loss}")
+        self.it += 1
         return loss
 
-    def rgb_loss(self, pred, labels, masks=None, edge=None):
-        """Perform MSE on RGB color values and use masks if available, including edge loss."""
-        # RGB Loss
+    def mse_loss(self, pred, labels, masks=None):
+        """Perform MSE on prediction and groundtruth images and use masks if available."""
         if masks is None:
-            rgb_loss = (pred.contiguous() - labels) ** 2
-            rgb_loss = rgb_loss.mean()
+            loss = (pred.contiguous() - labels) ** 2
+            loss = loss.mean()
         else:
             masked_diff = (pred.contiguous() - labels) * masks
             masked_loss = masked_diff ** 2
-            rgb_loss = masked_loss.sum() / masks.sum()  # Only average over unmasked elements
-
-
-        """"""
-        # Edge Loss
-        # Compute the dynamic alpha value with init and final from options and 
-        self.it += 1
-        alpha = self.opt.alpha_initial + (self.opt.alpha_final - self.opt.alpha_initial) * (self.it / self.max_iter)
-        rgb_weight = 1 - alpha
-        edge_loss = 0
-
-
-        if edge is not None:
-
-            # Change Shape of Prediction and Masks to use compute_edge function
-            pred_reshaped = pred.view(self.batch_size, self.h, self.w, 3).permute(0, 3, 1, 2)  # Reshape to [B, 3, H*W]
-            mask_reshaped = masks.view(self.batch_size, self.h, self.w, 1).permute(0, 3, 1, 2)  # Reshape to [B, 3, H*W]
-
-
-            for i in range(len(pred)):  # Iterate over the length of pred
-                single_pred = pred_reshaped[i].unsqueeze(0)  # Add batch dimension back
-                pred_edges = inputs.compute_edges(single_pred, self.opt.device)  # Compute edges for single_pred
-
-
-                for j in range(len(edge)):
-                    single_mask = mask_reshaped[j].unsqueeze(0)  # Add batch dimension back
-                    single_mask = torch.from_numpy(cv2.GaussianBlur(single_mask.detach().cpu().numpy().squeeze(), (5, 5), 0)).to(self.opt.device)
-                    single_mask = single_mask.view(1, 1, self.h * self.w, 1)
-
-
-                    single_edge = edge[j].unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions back
-                    single_edge_final = single_edge * single_mask
-                    pred_edges_resized = torch_F.interpolate(pred_edges, size=single_edge.shape[2:], mode='bilinear', align_corners=False)
-                    edge_diff = (pred_edges_resized - single_edge_final) ** 2
-                    
-            edge_loss /= (len(pred) * len(edge))  # Average the edge loss over the batch and edge length
-        total_loss = rgb_weight * rgb_loss + alpha * edge_loss
-        # print(f"Edge loss is: {edge_loss}")
-        # print(f"RGB loss is: {rgb_loss}")
-        # print(f"total loss is: {total_loss}")
-
-        return total_loss
+            loss = masked_loss.sum() / masks.sum()  # Only average over unmasked elements
+        return loss
 
 # ============================ Neural Image Function ============================
 
