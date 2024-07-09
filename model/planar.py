@@ -22,6 +22,8 @@ import util_vis
 from util import log
 from warp import Warp
 
+import matplotlib.pyplot as plt
+
 # ============================ main engine for training and evaluation ============================
 
 class Model(torch.nn.Module):
@@ -55,7 +57,7 @@ class Model(torch.nn.Module):
         self.ep = self.it = self.vis_it = 0
 
     def load_dataset(self):
-        """Load all images and ither inputs."""
+        """Load all images and other inputs."""
         log.info("loading dataset...")
         image_paths = [
             f'data/planar/{self.dataset}/{i}.png' for i in range(self.batch_size)
@@ -67,7 +69,8 @@ class Model(torch.nn.Module):
             self.opt,
             fps_images=image_paths,
             fps_masks=mask_paths if self.opt.use_masks else None,
-            fp_gt=f'data/planar/{self.dataset}/gt.png'
+            fp_gt=f'data/planar/{self.dataset}/gt.png',
+            edges = True if self.opt.use_edges else None
             )
 
     def build_networks(self):
@@ -326,6 +329,9 @@ class Graph(torch.nn.Module):
         # Utility variables
         self.h = self.opt.patch_H if self.opt.use_cropped_images else self.opt.H
         self.w = self.opt.patch_W if self.opt.use_cropped_images else self.opt.W
+        # Iterations
+        self.max_iter = opt.max_iter
+        self.it = 0
 
     def forward(self, var, mode=None): # pylint: disable=unused-argument
         """Get image prediction given the current homographies"""
@@ -334,32 +340,45 @@ class Graph(torch.nn.Module):
         xy_grid_warped = self.warp.warp_grid(xy_grid, self.warp_param.weight)
         # get rgb image prediction for the warped 2d area
         var.rgb_prediction = self.neural_image.forward(xy_grid_warped) # [B, HW, 3]
-        # used for tensorboard visualisation
-        var.rgb_prediction_map = var.rgb_prediction.view(
-            self.batch_size, int(self.h), int(self.w), 3
-            ).permute(0, 3, 1, 2) # [B, 3, H, W]
+        var.rgb_prediction_map = var.rgb_prediction.view(self.batch_size, int(self.h), int(self.w), 3).permute(0, 3, 1, 2) # [B, 3, H, W]
+        var.edge_prediction = inputs.compute_edges(var.rgb_prediction_map, self.opt.device) # [B, 3, H, W]
         return var
 
     def compute_loss(self, var, mode=None): # pylint: disable=unused-argument
         """Compute Loss"""
         loss = edict()
+        # Influence factor for edge alignment and rgb alignment in loss
+        alpha = self.opt.alpha_initial + (self.opt.alpha_final - self.opt.alpha_initial) * (self.it / self.max_iter)
+
         if self.opt.loss_weight.render is not None:
-            image_pert = var.images.rgb.view(self.batch_size, 3, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long
-            mask_pert = None
-            if var.images.masks is not None:
-                mask_pert = var.images.masks.view(self.batch_size, 1, int(self.h * self.w)).permute(0, 2, 1) # pylint: disable=line-too-long
-            loss.render = self.rgb_loss(var.rgb_prediction, image_pert, mask_pert)
+            rgb_loss = self.mse_loss(
+                var.rgb_prediction_map,
+                var.images.rgb,
+                var.images.masks)
+            edge_loss = self.mse_loss(
+                var.edge_prediction,
+                var.images.edges,
+                var.images.masks_eroded)
+            loss.render = \
+                (1 - alpha) * rgb_loss + \
+                (alpha) * edge_loss
+        
+        # if not self.it % 100:
+        #     print(f"Edge loss is: {edge_loss}")
+        #     print(f"RGB loss is: {rgb_loss}")
+        self.it += 1
         return loss
 
-    def rgb_loss(self, pred, labels, masks=None):
-        """Perform MSE on RGB color values and use masks if available"""
+    def mse_loss(self, pred, labels, masks=None):
+        """Perform MSE on prediction and groundtruth images and use masks if available."""
         if masks is None:
             loss = (pred.contiguous() - labels) ** 2
-            return loss.mean()
-        masked_diff = (pred.contiguous() - labels) * masks
-        masked_loss = masked_diff ** 2
-        mean_loss = masked_loss.sum() / masks.sum()  # Only average over unmasked elements
-        return mean_loss
+            loss = loss.mean()
+        else:
+            masked_diff = (pred.contiguous() - labels) * masks
+            masked_loss = masked_diff ** 2
+            loss = masked_loss.sum() / masks.sum()  # Only average over unmasked elements
+        return loss
 
 # ============================ Neural Image Function ============================
 

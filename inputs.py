@@ -9,6 +9,9 @@ import imageio
 import torchvision.transforms.functional as torchvision_F
 from easydict import EasyDict as edict
 
+import cv2
+import numpy as np
+
 def load_images(fps, opt, mode='RGB', invert_gray=False):
     """Loads a set of images into a tensor from a list of file pointers.
     Given the model options, also scales these images and saves them to
@@ -50,28 +53,45 @@ def compute_histograms(images, device):
     # device = string
     return 0
 
-def compute_derivative_y(images, device):
-    """Compute the y-derivative from a tensor holding images."""
-    # TODO
+def compute_edges(images_tensor, device):
+    """Compute edge image tensors from a grayscale image tensor containing 1 or more images."""
     # Images = tensor of size [B, 3, H, W]
     # device = string
-    return 0
+    processed_images = []
+    for image in images_tensor:
+        # image preparation
+        if image.is_cuda:
+            image = image.detach().cpu()
+        i = image.numpy()
+        i = np.transpose(i, (1, 2, 0))
+        # compute derivatives and edge image
+        sobel_x = cv2.Sobel(i, cv2.CV_64F, 1, 0, ksize=3)
+        sobel_y = cv2.Sobel(i, cv2.CV_64F, 0, 1, ksize=3)
+        i = np.sqrt(sobel_x**2 + sobel_y**2)
+        # blur result to make loss calculation and gradient descent easier
+        i = cv2.GaussianBlur(i, (5, 5), 0)
+        i = torchvision_F.to_tensor(i).to(device)
+        processed_images.append(i)
+    return torch.stack(processed_images)
 
-def compute_derivative_x(images, device):
-    """Compute the x-derivative from a tensor holding images."""
-    # TODO
-    # Images = tensor of size [B, 3, H, W]
+def erode_images(images_tensor, device, kernel=(5, 5)):
+    """Compute eroded grayscale image tensor containing 1 or more images."""
+    # Images = tensor of size [B, x, H, W]
     # device = string
-    return 0
+    processed_images = []
+    for image in images_tensor:
+        # image preparation
+        if image.is_cuda:
+            image = image.detach().cpu()
+        i = image.numpy()
+        i = np.transpose(i, (1, 2, 0))
+        i = cv2.erode(i, cv2.getStructuringElement(cv2.MORPH_RECT, kernel))
+        i = torchvision_F.to_tensor(i).to(device)
+        processed_images.append(i)
+    return torch.stack(processed_images)
 
-def compute_edges(images, device):
-    """Compute an edge image from a tensor holding images."""
-    # TODO
-    # Images = tensor of size [B, 3, H, W]
-    # device = string
-    return 0
 
-def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None):
+def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, edges=True):
     """Load distorted and occluded images used for reconstruction.
     This function assumes a 
     """
@@ -82,13 +102,14 @@ def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None):
     inputs.rgb = load_images(fps_images, opt)
     # Invert loaded masks (SIDAR Dataset sets occlusions to 1)
     inputs.masks = load_images(fps_masks, opt, mode='L', invert_gray=True)
+    inputs.masks_eroded = erode_images(inputs.masks, opt.device, kernel=(5,5))
     ##### perform image processing and save the results
     # save grayscale version of images
     inputs.gray = load_images(fps_images, opt, mode='L')
-    inputs.histograms = compute_histograms(inputs.rgb, opt.device)
-    inputs.histograms_normalized = compute_histograms(inputs.rgb, opt.device)
-    inputs.edges = compute_edges(inputs.rgb, opt.device)
-    inputs.derivative_x = compute_derivative_x(inputs.rgb, opt.device)
-    inputs.derivative_y = compute_derivative_y(inputs.rgb, opt.device)
+    # generate edge images
+    inputs.edges = compute_edges(inputs.gray, opt.device) if edges else None
+    # TODO:
+    # inputs.histograms = compute_histograms(inputs.rgb, opt.device)
+    # inputs.histograms_normalized = compute_histograms(inputs.rgb, opt.device)
 
     return inputs

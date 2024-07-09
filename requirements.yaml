@@ -21,6 +21,7 @@ dependencies:
   - pyyaml
   - pip
   - gdown
+  - opencv
   - pip:
     - lpips
     # - pymcubes
