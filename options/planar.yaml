@@ -83,3 +83,8 @@ freq:                                                       # periodic actions d
     vis: 100                                                # visualize results (every N iterations)
     val: 20                                                 # validate on val set (every N epochs)
     ckpt: 50                                                # save checkpoint (every N epochs)
+
+
+################## Mask Generation
+use_implicit_mask: True
+N_vocab: 1024
