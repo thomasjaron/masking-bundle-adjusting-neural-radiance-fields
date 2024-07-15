@@ -102,7 +102,7 @@ def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, edges=True)
     inputs.rgb = load_images(fps_images, opt)
     # Invert loaded masks (SIDAR Dataset sets occlusions to 1)
     inputs.masks = load_images(fps_masks, opt, mode='L', invert_gray=True)
-    inputs.masks_eroded = erode_images(inputs.masks, opt.device, kernel=(5,5))
+    inputs.masks_eroded = erode_images(inputs.masks, opt.device, kernel=(5,5)) if inputs.masks else None
     ##### perform image processing and save the results
     # save grayscale version of images
     inputs.gray = load_images(fps_images, opt, mode='L')

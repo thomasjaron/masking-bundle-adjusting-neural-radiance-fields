@@ -358,7 +358,7 @@ class Graph(torch.nn.Module):
             edge_loss = self.mse_loss(
                 var.edge_prediction,
                 var.images.edges,
-                var.images.masks_eroded)
+                var.images.masks_eroded) if self.opt.use_edges else 0
             loss.render = \
                 (1 - alpha) * rgb_loss + \
                 (alpha) * edge_loss
