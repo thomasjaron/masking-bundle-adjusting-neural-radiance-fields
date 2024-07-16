@@ -286,6 +286,9 @@ class Model(torch.nn.Module):
         # vertically align the images and cast them to valid values [0...255]
         frame_cat = (torch.cat([frame, frame2], dim=1)*255).byte().permute(1, 2, 0).numpy()
         imageio.imsave(f"{self.vis_path}/{self.vis_it}.png", frame_cat)
+        mask_formed = var.mask_prediction.view(self.batch_size, int(self.opt.patch_H), int(self.opt.patch_W), 1).permute(0, 3, 1, 2)
+        print(mask_formed.shape)
+        inputs.save_images(mask_formed, suffix='gen_mask', mode='L')
         # for indexx, p in enumerate(var.rgb_prediction_map):
         #     pic = p.cpu().permute(1, 2, 0).numpy()
         #     imageio.imsave(f"{self.vis_path}/rgbwarped-{self.vis_it}-{indexx}.png", (pic * 255).astype(np.uint8))
@@ -336,7 +339,7 @@ class Graph(torch.nn.Module):
 
         if self.opt.use_implicit_mask:
             self.embedding_uv = PosEmbedding(10-1, 10)
-            self.implicit_mask = ImplicitMask(self.opt)
+            self.implicit_mask = ImplicitMask()
             self.embedding_view = torch.nn.Embedding(self.opt.N_vocab, 128)
 
     def forward(self, var, mode=None): # pylint: disable=unused-argument
@@ -348,15 +351,17 @@ class Graph(torch.nn.Module):
         var.rgb_prediction = self.neural_image.forward(xy_grid_warped) # [B, HW, 3]
         var.rgb_prediction_map = var.rgb_prediction.view(self.batch_size, int(self.h), int(self.w), 3).permute(0, 3, 1, 2) # [B, 3, H, W]
         var.edge_prediction = inputs.compute_edges(var.rgb_prediction_map, self.opt.device) # [B, 3, H, W]
+        masks = []
         if self.opt.use_implicit_mask:
             for im in var.images.rgb:
-                print(xy_grid[0].shape)
-                print(im.shape)
+                flattened_image = im.long().view(3, -1).permute(1, 0)
                 uv_embedded = self.embedding_uv(xy_grid[0])
-                view_embedded = self.embedding_view(im) # TODO: Not working yet
-                print(uv_embedded.shape)
-                print(view_embedded.shape)
-                var.mask_prediction = self.implicit_mask(torch.cat(view_embedded, uv_embedded, dim=-1))
+                view_embedded = self.embedding_view(flattened_image).view(180, 240, 3, -1) # TODO: Not working yet
+                embedded_image_flat = view_embedded.view(-1, 3 * 128)
+                p= self.implicit_mask(torch.cat((embedded_image_flat, uv_embedded), dim=-1))
+                masks.append(p)
+                print(p)
+        var.mask_prediction = torch.stack(masks)
         return var
 
     def compute_loss(self, var, mode=None): # pylint: disable=unused-argument
@@ -374,15 +379,16 @@ class Graph(torch.nn.Module):
                 var.edge_prediction,
                 var.images.edges,
                 var.images.masks_eroded) if self.opt.use_edges else 0
-            mask_loss = (1 - var.mask_prediction)**2 if self.opt.use_implicit_mask else 0
+            mask_loss = ((1 - var.mask_prediction.contiguous())**2).mean() if self.opt.use_implicit_mask else 0
             loss.render = \
                 (1 - alpha) * rgb_loss + \
                 (alpha) * edge_loss + \
-                0.5 * mask_loss
+                mask_loss
         
-        # if not self.it % 100:
-        #     print(f"Edge loss is: {edge_loss}")
-        #     print(f"RGB loss is: {rgb_loss}")
+        if not self.it % 100:
+            print(f"Edge loss is: {edge_loss}")
+            print(f"RGB loss is: {rgb_loss}")
+            print(f"Mask loss is: {mask_loss}")
         self.it += 1
         return loss
 
@@ -481,10 +487,8 @@ class NeuralImageFunction(torch.nn.Module):
 
 class ImplicitMask(torch.nn.Module):
     # TODO: Choose correct latent and in channel dimensions
-    def __init__(self, opt, latent=128, W=256, in_channels_dir=42):
+    def __init__(self, latent=3*128, W=256, in_channels_dir=42):
         super().__init__()
-        H = opt.patch_H
-        # W = opt.patch_W
         self.mask_mapping = nn.Sequential(
                             nn.Linear(latent + in_channels_dir, W), nn.ReLU(True),
                             nn.Linear(W, W), nn.ReLU(True),
