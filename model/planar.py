@@ -3,6 +3,7 @@ import os
 import time
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as torch_F
 import torchvision.transforms.functional as torchvision_F
 from torch.utils import tensorboard
@@ -334,79 +335,9 @@ class Graph(torch.nn.Module):
         self.it = 0
 
         if self.opt.use_implicit_mask:
-            ################################### getting uv sample
-            # img_w, img_h = self.all_imgs_wh[sample_ts]
-            # w_samples, h_samples = torch.meshgrid([torch.linspace(0, 1-1/img_w, int(sqrt(self.batch_size))), \
-            #                                         torch.linspace(0 , 1-1/img_h, int(sqrt(self.batch_size)))])
-            # h_sb = h_samples * scale + h_offset
-            # w_sb = w_samples * scale + w_offset
-            # uv_sample = torch.cat((h_sb.permute(1, 0).contiguous().view(-1,1), w_sb.permute(1, 0).contiguous().view(-1,1)), -1)
-
-            ########### OR
-
-            # w_samples, h_samples = torch.meshgrid([torch.linspace(0, 1-1/img_w, int(img_w)), \
-            #                                         torch.linspace(0, 1-1/img_h, int(img_h))])
-            # uv_sample = torch.cat((h_samples.permute(1, 0).contiguous().view(-1,1), w_samples.permute(1, 0).contiguous().view(-1,1)), -1)
-            # sample['uv_sample'] = uv_sample
-
-            ################################### getting ts
-            # sample['ts'] = self.test_appearance_idx * torch.ones(len(rays), dtype=torch.long)
-            # sample['ts'] = id_ * torch.ones(len(rays), dtype=torch.long)
-            # 'ts': self.all_rays[rgb_sample_points, 8].long(),
-            # 'rays': self.all_rays[rgb_sample_points, :8],
-            # self.all_rays = torch.cat(self.all_rays, 0) # ((N_images-1)*h*w, 8)
-            # self.all_rays += [torch.cat([rays_o, rays_d,
-            #                                     self.nears[id_]*torch.ones_like(rays_o[:, :1]),
-            #                                     self.fars[id_]*torch.ones_like(rays_o[:, :1]),
-            #                                     rays_t],
-            #                                     1)] # (h*w, 8)
-
-
-            # rays_o, rays_d = get_rays(directions, c2w)
-            # self.nears, self.fars = {}, {} # {id_: distance}
-            # for i, id_ in enumerate(self.img_ids):
-            #     xyz_cam_i = (xyz_world_h @ w2c_mats[i].T)[:, :3] # xyz in the ith cam coordinate
-            #     xyz_cam_i = xyz_cam_i[xyz_cam_i[:, 2]>0] # filter out points that lie behind the cam
-            #     self.nears[id_] = np.percentile(xyz_cam_i[:, 2], 0.1)
-            #     self.fars[id_] = np.percentile(xyz_cam_i[:, 2], 99.9)
-
-            # max_far = np.fromiter(self.fars.values(), np.float32).max()
-            # scale_factor = max_far/5 # so that the max far is scaled to 5
-            # self.poses[..., 3] /= scale_factor
-            # for k in self.nears:
-            #     self.nears[k] /= scale_factor
-            #     rays_t = id_ * torch.ones(len(rays_o), 1)
-
-            # directions = get_ray_directions(img_h, img_w, self.Ks[id_])
-
-            # # def get_ray_directions(H, W, K):
-            #     """
-            #     Get ray directions for all pixels in camera coordinate.
-            #     Reference: https://www.scratchapixel.com/lessons/3d-basic-rendering/
-            #             ray-tracing-generating-camera-rays/standard-coordinate-systems
-
-            #     Inputs:
-            #         H, W: image height and width
-            #         K: (3, 3) camera intrinsics
-
-            #     Outputs:
-            #         directions: (H, W, 3), the direction of the rays in camera coordinate
-            #     """
-            #     grid = create_meshgrid(H, W, normalized_coordinates=False)[0]
-            #     i, j = grid.unbind(-1)
-            #     # the direction here is without +0.5 pixel centering as calibration is not so accurate
-            #     # see https://github.com/bmild/nerf/issues/24
-            #     fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
-            #     directions = \
-            #         torch.stack([(i-cx)/fx, -(j-cy)/fy, -torch.ones_like(i)], -1) # (H, W, 3)
-
-            #     return directions
-
             self.embedding_uv = PosEmbedding(10-1, 10)
-            self.implicit_mask = ImplicitMask()
-            self.models_to_train += [self.implicit_mask]
+            self.implicit_mask = ImplicitMask(self.opt)
             self.embedding_view = torch.nn.Embedding(self.opt.N_vocab, 128)
-            self.models_to_train += [self.embedding_view]
 
     def forward(self, var, mode=None): # pylint: disable=unused-argument
         """Get image prediction given the current homographies"""
@@ -418,8 +349,14 @@ class Graph(torch.nn.Module):
         var.rgb_prediction_map = var.rgb_prediction.view(self.batch_size, int(self.h), int(self.w), 3).permute(0, 3, 1, 2) # [B, 3, H, W]
         var.edge_prediction = inputs.compute_edges(var.rgb_prediction_map, self.opt.device) # [B, 3, H, W]
         if self.opt.use_implicit_mask:
-            uv_embedded = self.embedding_uv(uv_sample)
-            var.mask_prediction = self.implicit_mask(torch.cat((self.embedding_view(ts), uv_embedded), dim=-1))
+            for im in var.images.rgb:
+                print(xy_grid[0].shape)
+                print(im.shape)
+                uv_embedded = self.embedding_uv(xy_grid[0])
+                view_embedded = self.embedding_view(im) # TODO: Not working yet
+                print(uv_embedded.shape)
+                print(view_embedded.shape)
+                var.mask_prediction = self.implicit_mask(torch.cat(view_embedded, uv_embedded, dim=-1))
         return var
 
     def compute_loss(self, var, mode=None): # pylint: disable=unused-argument
@@ -437,9 +374,11 @@ class Graph(torch.nn.Module):
                 var.edge_prediction,
                 var.images.edges,
                 var.images.masks_eroded) if self.opt.use_edges else 0
+            mask_loss = (1 - var.mask_prediction)**2 if self.opt.use_implicit_mask else 0
             loss.render = \
                 (1 - alpha) * rgb_loss + \
-                (alpha) * edge_loss
+                (alpha) * edge_loss + \
+                0.5 * mask_loss
         
         # if not self.it % 100:
         #     print(f"Edge loss is: {edge_loss}")
@@ -540,10 +479,12 @@ class NeuralImageFunction(torch.nn.Module):
 
 # ============================ Implicit Mask Generation ============================
 
-class ImplicitMask(nn.Module):
+class ImplicitMask(torch.nn.Module):
     # TODO: Choose correct latent and in channel dimensions
-    def __init__(self, latent=128, W=256, in_channels_dir=42):
+    def __init__(self, opt, latent=128, W=256, in_channels_dir=42):
         super().__init__()
+        H = opt.patch_H
+        # W = opt.patch_W
         self.mask_mapping = nn.Sequential(
                             nn.Linear(latent + in_channels_dir, W), nn.ReLU(True),
                             nn.Linear(W, W), nn.ReLU(True),
@@ -554,3 +495,32 @@ class ImplicitMask(nn.Module):
     def forward(self, x):
         mask = self.mask_mapping(x)
         return mask
+
+
+class PosEmbedding(torch.nn.Module):
+    def __init__(self, max_logscale, N_freqs, logscale=True):
+        """
+        Defines a function that embeds x to (x, sin(2^k x), cos(2^k x), ...)
+        """
+        super().__init__()
+        self.funcs = [torch.sin, torch.cos]
+
+        if logscale:
+            self.freqs = 2**torch.linspace(0, max_logscale, N_freqs)
+        else:
+            self.freqs = torch.linspace(1, 2**max_logscale, N_freqs)
+
+    def forward(self, x):
+        """
+        Inputs:
+            x: (B, 3)
+
+        Outputs:
+            out: (B, 6*N_freqs+3)
+        """
+        out = [x]
+        for freq in self.freqs:
+            for func in self.funcs:
+                out += [func(freq*x)]
+
+        return torch.cat(out, -1)

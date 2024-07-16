@@ -22,7 +22,7 @@ W: 480
 patch_H: 180
 patch_W: 240
 
-dataset: batch9                                             # directory containing images
+dataset: only_occlusions                                             # directory containing images
 use_masks: True                                             # whether or not to utilize masks in loss calculation
 use_edges: True                                             # whether to use sobel filter to align edges
 alpha_initial: 1.0                                         # configuring alpha weight, loss = rbg_weight * rgb_loss + alpha * edge_loss
@@ -87,4 +87,4 @@ freq:                                                       # periodic actions d
 
 ################## Mask Generation
 use_implicit_mask: True
-N_vocab: 1024
+N_vocab: 1500
