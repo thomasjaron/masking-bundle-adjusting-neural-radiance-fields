@@ -85,6 +85,7 @@ class Model(torch.nn.Module):
         optim_list = [
             dict(params=self.graph.neural_image.parameters(), lr=self.opt.optim.lr),
             dict(params=self.graph.warp_param.parameters(), lr=self.opt.optim.lr_warp),
+            dict(params=self.graph.implicit_mask.parameters(), lr=self.opt.optim.lr_mask),
         ]
         optimizer = getattr(torch.optim, self.opt.optim.algo)
         self.optim = optimizer(optim_list)
@@ -352,6 +353,7 @@ class Graph(torch.nn.Module):
         var.rgb_prediction_map = var.rgb_prediction.view(self.batch_size, int(self.h), int(self.w), 3).permute(0, 3, 1, 2) # [B, 3, H, W]
         var.edge_prediction = inputs.compute_edges(var.rgb_prediction_map, self.opt.device) # [B, 3, H, W]
         masks = []
+        # xy_mask = self.warp.get_mask_grid()
         if self.opt.use_implicit_mask:
             for im in var.images.rgb:
                 flattened_image = im.long().view(3, -1).permute(1, 0)
@@ -360,8 +362,9 @@ class Graph(torch.nn.Module):
                 embedded_image_flat = view_embedded.view(-1, 3 * 128)
                 p= self.implicit_mask(torch.cat((embedded_image_flat, uv_embedded), dim=-1))
                 masks.append(p)
-                print(p)
+                # print(p)
         var.mask_prediction = torch.stack(masks)
+        var.mask_prediction_map = var.mask_prediction.view(self.batch_size, int(self.h), int(self.w), 1).permute(0, 3, 1, 2) # [B, 1, H, W]
         return var
 
     def compute_loss(self, var, mode=None): # pylint: disable=unused-argument
@@ -374,18 +377,22 @@ class Graph(torch.nn.Module):
             rgb_loss = self.mse_loss(
                 var.rgb_prediction_map,
                 var.images.rgb,
-                var.images.masks)
+                var.mask_prediction_map)
             edge_loss = self.mse_loss(
                 var.edge_prediction,
                 var.images.edges,
-                var.images.masks_eroded) if self.opt.use_edges else 0
-            mask_loss = ((1 - var.mask_prediction.contiguous())**2).mean() if self.opt.use_implicit_mask else 0
+                var.mask_prediction_map) if self.opt.use_edges else 0
+            mask_loss = ((1 - var.mask_prediction_map.contiguous())**2).mean() if self.opt.use_implicit_mask else 0
             loss.render = \
                 (1 - alpha) * rgb_loss + \
-                (alpha) * edge_loss + \
-                mask_loss
+                0.5 * mask_loss + \
+                (alpha) * edge_loss 
+
+            # loss.render = 0.5 * ((1 - var.mask_prediction_map.detach().contiguous()) * (var.rgb_prediction_map.contiguous() - var.images.rgb)**2).mean()
+
         
         if not self.it % 100:
+            print(loss.render)
             print(f"Edge loss is: {edge_loss}")
             print(f"RGB loss is: {rgb_loss}")
             print(f"Mask loss is: {mask_loss}")

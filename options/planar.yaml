@@ -51,7 +51,7 @@ warp:                                                       # image warping opti
     dof: 8                                                  # degrees of freedom of the warp function
     noise_h: 0.1                                            # scale of pre-generated warp perturbation (homography)
     noise_t: 0.2                                            # scale of pre-generated warp perturbation (translation)
-    fix_first: false                                         # fix the first patch for uniqueness of solution
+    fix_first: true                                         # fix the first patch for uniqueness of solution
 
 
 loss_weight:                                                # loss weights (in log scale)
@@ -60,6 +60,7 @@ loss_weight:                                                # loss weights (in l
 optim:                                                      # optimization options
     lr: 1.e-3                                               # learning rate (main)
     lr_warp: 1.e-3                                          # learning rate of warp parameters
+    lr_mask: 1.e-3
     lr_end:                                                 # terminal learning rate (only used with sched.type=ExponentialLR)
     algo: Adam                                              # optimizer (see PyTorch doc)
     sched: {}                                               # learning rate scheduling options

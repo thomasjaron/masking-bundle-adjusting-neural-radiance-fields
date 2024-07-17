@@ -30,6 +30,12 @@ class Warp:
         mat_hom = torch.cat([matrix, torch.ones_like(matrix[..., :1])], dim=-1)
         return mat_hom
 
+    def get_mask_grid(self):
+        w_samples, h_samples = torch.meshgrid([torch.linspace(0, 1-1/self.crop_w, int(self.crop_w)), \
+                                                    torch.linspace(0, 1-1/self.crop_h, int(self.crop_h))])
+        uv_sample = torch.cat((h_samples.permute(1, 0).contiguous().view(-1,1), w_samples.permute(1, 0).contiguous().view(-1,1)), -1)
+        return uv_sample.to(self.device)
+
     def get_normalized_pixel_grid(self, crop=False):
         """Create a pixel grid fitting to the output image width and height,
         which optionally can be cropped to fit the input image width and height"""
