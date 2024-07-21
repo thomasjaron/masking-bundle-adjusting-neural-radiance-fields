@@ -46,13 +46,6 @@ def load_single_image(fp, device, mode='RGB'):
     im = PIL.Image.open(fp).convert(mode)
     return torchvision_F.to_tensor(im).to(device)
 
-def compute_histograms(images, device):
-    """Compute histograms from a tensor holding images."""
-    # TODO
-    # Images = tensor of size [B, 3, H, W]
-    # device = string
-    return 0
-
 def compute_edges(images_tensor, device):
     """Compute edge image tensors from a grayscale image tensor containing 1 or more images."""
     # Images = tensor of size [B, 3, H, W]
@@ -102,14 +95,11 @@ def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, edges=True)
     inputs.rgb = load_images(fps_images, opt)
     # Invert loaded masks (SIDAR Dataset sets occlusions to 1)
     inputs.masks = load_images(fps_masks, opt, mode='L', invert_gray=True)
-    inputs.masks_eroded = erode_images(inputs.masks, opt.device, kernel=(5,5)) if inputs.masks else None
+    inputs.masks_eroded = erode_images(inputs.masks, opt.device, kernel=(5,5)) if (inputs.masks is not None) else None
     ##### perform image processing and save the results
     # save grayscale version of images
     inputs.gray = load_images(fps_images, opt, mode='L')
     # generate edge images
     inputs.edges = compute_edges(inputs.gray, opt.device) if edges else None
-    # TODO:
-    # inputs.histograms = compute_histograms(inputs.rgb, opt.device)
-    # inputs.histograms_normalized = compute_histograms(inputs.rgb, opt.device)
 
     return inputs

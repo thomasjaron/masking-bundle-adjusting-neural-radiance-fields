@@ -85,8 +85,12 @@ class Model(torch.nn.Module):
         optim_list = [
             dict(params=self.graph.neural_image.parameters(), lr=self.opt.optim.lr),
             dict(params=self.graph.warp_param.parameters(), lr=self.opt.optim.lr_warp),
-            dict(params=self.graph.implicit_mask.parameters(), lr=self.opt.optim.lr_mask),
         ]
+        if self.opt.use_implicit_mask and self.opt.build_single_masks:
+            optim_list.extend([dict(params=mask.parameters(), lr=self.opt.optim.lr_mask) for (i, mask) in self.graph.implicit_masks.items()])
+        elif self.opt.use_implicit_mask:
+            optim_list.append(dict(params=self.graph.implicit_mask.parameters(), lr=self.opt.optim.lr_mask))
+
         optimizer = getattr(torch.optim, self.opt.optim.algo)
         self.optim = optimizer(optim_list)
         # set up scheduler
@@ -280,38 +284,36 @@ class Model(torch.nn.Module):
 
     @torch.no_grad()
     def visualize(self, var, step=0, split="train"):
-        """vizualize"""
+        """visualize"""
         # dump frames for writing to video
         frame = self.visualize_patches(self.graph.warp_param.weight) # upper image
         frame2 = self.predict_entire_image() # prediction, lower image
         # vertically align the images and cast them to valid values [0...255]
         frame_cat = (torch.cat([frame, frame2], dim=1)*255).byte().permute(1, 2, 0).numpy()
         imageio.imsave(f"{self.vis_path}/{self.vis_it}.png", frame_cat)
-        mask_formed = var.mask_prediction.view(self.batch_size, int(self.opt.patch_H), int(self.opt.patch_W), 1).permute(0, 3, 1, 2)
-        print(mask_formed.shape)
-        inputs.save_images(mask_formed, suffix='gen_mask', mode='L')
-        # for indexx, p in enumerate(var.rgb_prediction_map):
-        #     pic = p.cpu().permute(1, 2, 0).numpy()
-        #     imageio.imsave(f"{self.vis_path}/rgbwarped-{self.vis_it}-{indexx}.png", (pic * 255).astype(np.uint8))
+
         self.vis_it += 1
         # visualize in Tensorboard
         if self.opt.tb:
             colors = self.box_colors
-            util_vis.tb_image( # [B, 3, H, W]
-                self.opt, self.tb, self.it+1, "train", "image_pert", util_vis.color_border(var.images.rgb, colors) # pylint: disable=line-too-long
+            util_vis.tb_image(
+                self.opt, self.tb, self.it+1, "train", "input_images", util_vis.color_border(var.images.rgb, colors) # pylint: disable=line-too-long
                 )
             util_vis.tb_image(
-                self.opt, self.tb, self.it+1, "train", "rgb_warped", util_vis.color_border((var.rgb_prediction_map*255), colors) # pylint: disable=line-too-long
+                self.opt, self.tb, self.it+1, "train", "predicted_image", frame2[None]
                 )
-            util_vis.tb_image(
-                self.opt, self.tb, self.it+1, "train", "image_boxes", frame[None]
-                )
-            # util_vis.tb_image(
-            #     self.opt, self.tb, self.it+1, "train", "image_boxes_GT", frame_gt[None]
-            #     )
-            util_vis.tb_image(
-                self.opt, self.tb, self.it+1, "train", "image_entire", frame2[None]
-                )
+            # Print out Masks
+            if self.opt.use_implicit_mask:
+                mask_formed = var.mask_prediction.view(self.batch_size, int(self.opt.patch_H), int(self.opt.patch_W), 1).permute(0, 3, 1, 2).cpu()
+                util_vis.tb_image(
+                    self.opt, self.tb, self.it+1, "train", "implicit_masks", util_vis.color_border((mask_formed), colors, width=1, depth=1) # pylint: disable=line-too-long
+                    )
+            # Print out Predictions Edges
+            if self.opt.use_edges:
+                edge_formed = var.edge_prediction.view(self.batch_size, int(self.opt.patch_H), int(self.opt.patch_W), 3).permute(0, 3, 1, 2).cpu()
+                util_vis.tb_image(
+                    self.opt, self.tb, self.it+1, "train", "predicted_edges", edge_formed
+                    )
 
 # ============================ computation graph for forward/backprop ============================
 
@@ -340,7 +342,12 @@ class Graph(torch.nn.Module):
 
         if self.opt.use_implicit_mask:
             self.embedding_uv = PosEmbedding(10-1, 10)
-            self.implicit_mask = ImplicitMask()
+            if self.opt.build_single_masks:
+                self.implicit_masks = {}
+                for i in range(self.batch_size):
+                    self.implicit_masks[f'{i}'] = ImplicitMask()
+            else:
+                self.implicit_mask = ImplicitMask()
             self.embedding_view = torch.nn.Embedding(self.opt.N_vocab, 128)
 
     def forward(self, var, mode=None): # pylint: disable=unused-argument
@@ -353,49 +360,45 @@ class Graph(torch.nn.Module):
         var.rgb_prediction_map = var.rgb_prediction.view(self.batch_size, int(self.h), int(self.w), 3).permute(0, 3, 1, 2) # [B, 3, H, W]
         var.edge_prediction = inputs.compute_edges(var.rgb_prediction_map, self.opt.device) # [B, 3, H, W]
         masks = []
-        # xy_mask = self.warp.get_mask_grid()
         if self.opt.use_implicit_mask:
-            for im in var.images.rgb:
+            for i, im in enumerate(var.images.rgb):
                 flattened_image = im.long().view(3, -1).permute(1, 0)
                 uv_embedded = self.embedding_uv(xy_grid[0])
-                view_embedded = self.embedding_view(flattened_image).view(180, 240, 3, -1) # TODO: Not working yet
+                view_embedded = self.embedding_view(flattened_image).view(180, 240, 3, -1)
                 embedded_image_flat = view_embedded.view(-1, 3 * 128)
-                p= self.implicit_mask(torch.cat((embedded_image_flat, uv_embedded), dim=-1))
+                if self.opt.build_single_masks:
+                    p = self.implicit_masks[f'{i}'](torch.cat((embedded_image_flat, uv_embedded), dim=-1).cpu())
+                else:
+                    p = self.implicit_mask(torch.cat((embedded_image_flat, uv_embedded), dim=-1))
                 masks.append(p)
-                # print(p)
-        var.mask_prediction = torch.stack(masks)
-        var.mask_prediction_map = var.mask_prediction.view(self.batch_size, int(self.h), int(self.w), 1).permute(0, 3, 1, 2) # [B, 1, H, W]
+            var.mask_prediction = torch.stack(masks).to(self.opt.device)
+            var.mask_prediction_map = var.mask_prediction.view(self.batch_size, int(self.h), int(self.w), 1).permute(0, 3, 1, 2) # [B, 1, H, W]
         return var
 
     def compute_loss(self, var, mode=None): # pylint: disable=unused-argument
         """Compute Loss"""
         loss = edict()
         # Influence factor for edge alignment and rgb alignment in loss
-        alpha = self.opt.alpha_initial + (self.opt.alpha_final - self.opt.alpha_initial) * (self.it / self.max_iter)
+        alpha = self.opt.alpha_initial + (self.opt.alpha_final - self.opt.alpha_initial) * (self.it / self.max_iter) if self.opt.use_edges else 0
 
         if self.opt.loss_weight.render is not None:
             rgb_loss = self.mse_loss(
                 var.rgb_prediction_map,
                 var.images.rgb,
-                var.mask_prediction_map)
+                var.mask_prediction_map if self.opt.use_implicit_mask else var.images.masks)
             edge_loss = self.mse_loss(
                 var.edge_prediction,
                 var.images.edges,
-                var.mask_prediction_map) if self.opt.use_edges else 0
+                var.mask_prediction_map if self.opt.use_implicit_mask else var.images.masks_eroded) if self.opt.use_edges else 0
             mask_loss = ((1 - var.mask_prediction_map.contiguous())**2).mean() if self.opt.use_implicit_mask else 0
             loss.render = \
                 (1 - alpha) * rgb_loss + \
                 0.5 * mask_loss + \
                 (alpha) * edge_loss 
 
-            # loss.render = 0.5 * ((1 - var.mask_prediction_map.detach().contiguous()) * (var.rgb_prediction_map.contiguous() - var.images.rgb)**2).mean()
-
-        
-        if not self.it % 100:
-            print(loss.render)
-            print(f"Edge loss is: {edge_loss}")
-            print(f"RGB loss is: {rgb_loss}")
-            print(f"Mask loss is: {mask_loss}")
+            loss.rgb = rgb_loss
+            loss.mask = mask_loss
+            loss.edge = edge_loss
         self.it += 1
         return loss
 

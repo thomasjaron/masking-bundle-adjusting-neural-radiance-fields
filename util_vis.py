@@ -40,13 +40,17 @@ def get_heatmap(gray, cmap):  # [N,H,W]
     return color
 
 
-def color_border(images, colors, width=3):
+def color_border(images, colors, width=3, depth=3):
     """Color borders"""
     images_pad = []
     for i, image in enumerate(images):
-        image_pad = torch.ones(
-            3, image.shape[1]+width*2, image.shape[2]+width*2)*(colors[i, :, None, None]/255.0)
+        if depth == 1:
+            image_pad = torch.ones(
+                1, image.shape[1]+width*2, image.shape[2]+width*2)*(127.0/255.0)
+        if depth == 3:
+            image_pad = torch.ones(
+                3, image.shape[1]+width*2, image.shape[2]+width*2)*(colors[i, :, None, None]/255.0)
         image_pad[:, width:-width, width:-width] = image
         images_pad.append(image_pad)
     images_pad = torch.stack(images_pad, dim=0)
-    return images_pad # [B, 3, H, W]
+    return images_pad # [B, depth, H, W]
