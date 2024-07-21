@@ -92,7 +92,7 @@ visdom:                                                     # Visdom options
 
 freq:                                                       # periodic actions during training
     scalar: 20                                              # log losses and scalar states (every N iterations)
-    vis: 20                                                # visualize results (every N iterations)
+    vis: 50                                                # visualize results (every N iterations)
     val: 20                                                 # validate on val set (every N epochs)
     ckpt: 50                                                # save checkpoint (every N epochs)
 
