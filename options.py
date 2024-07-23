@@ -40,7 +40,7 @@ def parse_arguments(args):
 
 
 def set_opt(opt_cmd=None):
-    """Set Options"""
+    """Save used options into a file and return a dict representing the options"""
     if opt_cmd is None:
         opt_cmd = {}
     log.info("setting configurations...")
@@ -57,7 +57,7 @@ def set_opt(opt_cmd=None):
 
 
 def load_options(fname):
-    """Load Options"""
+    """Load Options from the given file"""
     with open(fname) as file:  # pylint: disable=unspecified-encoding
         opt = edict(yaml.safe_load(file))
     if "_parent_" in opt:
@@ -74,7 +74,7 @@ def load_options(fname):
 
 
 def override_options(opt, opt_over, key_stack=None, safe_check=False):
-    """Override Options"""
+    """Override previously saved options file with new file on changes"""
     for key, value in opt_over.items():
         if isinstance(value, dict):
             # parse child options (until leaf nodes are reached)
@@ -97,7 +97,7 @@ def override_options(opt, opt_over, key_stack=None, safe_check=False):
 
 
 def process_options(opt):
-    """Process options"""
+    """Set defualt values if options are not sufficiently prepared"""
     # set seed
     if opt.seed is not None:
         random.seed(opt.seed)
@@ -121,7 +121,7 @@ def process_options(opt):
 
 
 def save_options_file(opt):
-    """Save Options File"""
+    """Save used options file to output directory"""
     opt_fname = f"{opt.output_path}/options.yaml"
     if os.path.isfile(opt_fname):
         with open(opt_fname) as file:  # pylint: disable=unspecified-encoding

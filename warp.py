@@ -30,12 +30,6 @@ class Warp:
         mat_hom = torch.cat([matrix, torch.ones_like(matrix[..., :1])], dim=-1)
         return mat_hom
 
-    def get_mask_grid(self):
-        w_samples, h_samples = torch.meshgrid([torch.linspace(0, 1-1/self.crop_w, int(self.crop_w)), \
-                                                    torch.linspace(0, 1-1/self.crop_h, int(self.crop_h))])
-        uv_sample = torch.cat((h_samples.permute(1, 0).contiguous().view(-1,1), w_samples.permute(1, 0).contiguous().view(-1,1)), -1)
-        return uv_sample.to(self.device)
-
     def get_normalized_pixel_grid(self, crop=False):
         """Create a pixel grid fitting to the output image width and height,
         which optionally can be cropped to fit the input image width and height"""
@@ -87,9 +81,9 @@ class Warp:
             xy_grid_hom = self.to_hom(xy_grid)
             warp_matrix = lie.se2_to_SE2(warp)
             warped_grid = xy_grid_hom @ warp_matrix.transpose(-2, -1)  # [B, HW, 2]
-        elif self.warp_type == "homography": # NOTE: usually this case
+        elif self.warp_type == "homography":
             assert self.dof == 8
-            xy_grid_hom = self.to_hom(xy_grid) # appends a 1 vector at the end of the matrix
+            xy_grid_hom = self.to_hom(xy_grid)
             warp_matrix = lie.sl3_to_SL3(warp)
             warped_grid_hom = xy_grid_hom@warp_matrix.transpose(-2, -1)
             warped_grid = warped_grid_hom[..., :2] / \
@@ -157,29 +151,8 @@ class Lie():
         delta = torch.cat([u, theta], dim=-1)
         return delta
 
-    def se2_jacobian(self, X, delta):  # [...,N,2],[...,3]
-        """Docstring"""
-        u, theta = delta.split([2, 1], dim=-1)
-        A = self.taylor_A(theta)
-        B = self.taylor_B(theta)
-        C = self.taylor_C(theta)
-        D = self.taylor_D(theta)
-        V = torch.stack([torch.cat([A, -B], dim=-1),
-                         torch.cat([B, A], dim=-1)], dim=-2)
-        dV_dtheta = torch.stack([torch.cat([C, -D], dim=-1),
-                                 # [...,2,2]
-                                 torch.cat([D, C], dim=-1)], dim=-2)
-        dt_dtheta = dV_dtheta@u[..., None]  # [...,2,1]
-        J_so2 = self.so2_jacobian(X, theta)  # [...,N,2,1]
-        dX_dtheta = J_so2+dt_dtheta[..., None, :, :]  # [...,N,2,1]
-        dX_du = V[..., None, :, :].repeat(
-            *[1]*(len(dX_dtheta.shape)-3), dX_dtheta.shape[-3], 1, 1)
-        J = torch.cat([dX_du, dX_dtheta], dim=-1)
-        return J  # [...,N,2,3]
-
     def sl3_to_SL3(self, h):
-        """Docstring"""
-        # homography: directly expand matrix exponential
+        """homography: directly expand matrix exponential"""
         # https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.61.6151&rep=rep1&type=pdf
         h1, h2, h3, h4, h5, h6, h7, h8 = h.chunk(8, dim=-1)
         A = torch.stack([torch.cat([h5, h3, h1], dim=-1),
@@ -189,8 +162,7 @@ class Lie():
         return H
 
     def taylor_A(self, x, nth=10):
-        """Docstring"""
-        # Taylor expansion of sin(x)/x
+        """Taylor expansion of sin(x) / x"""
         ans = torch.zeros_like(x)
         denom = 1.
         for i in range(nth+1):
@@ -200,34 +172,12 @@ class Lie():
         return ans
 
     def taylor_B(self, x, nth=10):
-        """Docstring"""
-        # Taylor expansion of (1-cos(x))/x
+        """Taylor expansion of (1 - cos(x)) / x"""
         ans = torch.zeros_like(x)
         denom = 1.
         for i in range(nth+1):
             denom *= (2*i+1)*(2*i+2)
             ans = ans+(-1)**i*x**(2*i+1)/denom
         return ans
-
-    def taylor_C(self, x, nth=10):
-        """Docstring"""
-        # Taylor expansion of (x*cos(x)-sin(x))/x**2
-        ans = torch.zeros_like(x)
-        denom = 1.
-        for i in range(nth+1):
-            denom *= (2*i+2)*(2*i+3)
-            ans = ans+(-1)**(i+1)*x**(2*i+1)*(2*i+2)/denom
-        return ans
-
-    def taylor_D(self, x, nth=10):
-        """Docstring"""
-        # Taylor expansion of (x*sin(x)+cos(x)-1)/x**2
-        ans = torch.zeros_like(x)
-        denom = 1.
-        for i in range(nth+1):
-            denom *= (2*i+1)*(2*i+2)
-            ans = ans+(-1)**i*x**(2*i)*(2*i+1)/denom
-        return ans
-
 
 lie = Lie()

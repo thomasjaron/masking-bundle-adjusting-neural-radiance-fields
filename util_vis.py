@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 
 @torch.no_grad()
 def tb_image(opt, tb, step, group, name, images, num_vis=None, from_range=(0, 1), cmap="gray"):
-    """docstring"""
+    """Add given image(s) to tensorboard"""
     images = preprocess_vis_image(images, from_range=from_range, cmap=cmap)
     num_H, num_W = num_vis or opt.tb.num_images
     images = images[:num_H*num_W]
@@ -23,7 +23,7 @@ def tb_image(opt, tb, step, group, name, images, num_vis=None, from_range=(0, 1)
 
 
 def preprocess_vis_image(images, from_range=(0, 1), cmap="gray"):
-    """Preprocess image"""
+    """Preprocess image before adding to tensorboard"""
     min_val, max_val = from_range
     images = (images-min_val)/(max_val-min_val)
     images = images.clamp(min=0, max=1).cpu()
@@ -33,7 +33,7 @@ def preprocess_vis_image(images, from_range=(0, 1), cmap="gray"):
 
 
 def get_heatmap(gray, cmap):  # [N,H,W]
-    """Get heatmap"""
+    """Get heatmap for 1D Images"""
     color = plt.get_cmap(cmap)(gray.numpy())
     color = torch.from_numpy(color[..., :3]).permute(
         0, 3, 1, 2).float()  # [N,3,H,W]
@@ -41,7 +41,7 @@ def get_heatmap(gray, cmap):  # [N,H,W]
 
 
 def color_border(images, colors, width=3, depth=3):
-    """Color borders"""
+    """Add padding colored borders to images before adding them to tensor board"""
     images_pad = []
     for i, image in enumerate(images):
         if depth == 1:

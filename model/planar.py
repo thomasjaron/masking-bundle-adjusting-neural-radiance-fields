@@ -35,7 +35,7 @@ class Model(torch.nn.Module):
         self.opt = opt
         self.batch_size = opt.batch_size
         self.dataset = opt.dataset
-        os.makedirs(opt.output_path,exist_ok=True)
+        os.makedirs(opt.output_path, exist_ok=True)
         self.warp = Warp(opt)
         # container for all images and image processings
         self.images = None
@@ -44,9 +44,6 @@ class Model(torch.nn.Module):
         # setup optimizer
         self.optim = None
         self.sched = None
-        # restore checkpoint
-        self.epoch_start = 0
-        self.iter_start = 0
 
         self.tb = None
 
@@ -80,7 +77,7 @@ class Model(torch.nn.Module):
         self.graph = Graph(self.opt).to(self.opt.device)
 
     def setup_optimizer(self):
-        """Set up optimizers"""
+        """Set up optimizer and add networks to it"""
         log.info("setting up optimizers...")
         optim_list = [
             dict(params=self.graph.neural_image.parameters(), lr=self.opt.optim.lr),
@@ -100,34 +97,25 @@ class Model(torch.nn.Module):
             self.sched = scheduler(self.optim, **kwargs)
 
     def setup_visualizer(self):
-        """Setup vis"""
+        """Setup for visualization"""
         log.info("setting up visualizers...")
         # activate tensorboard
         if self.opt.tb:
-            self.tb = torch.utils.tensorboard.SummaryWriter(log_dir=self.opt.output_path,flush_secs=10)
+            self.tb = torch.utils.tensorboard.SummaryWriter(log_dir=self.opt.output_path, flush_secs=10)
 
         # Prepare homography visualization
-        box_colors = [
-            "#FF5733",  # Red-Orange
-            "#33FF57",  # Lime Green
-            "#3357FF",  # Blue
-            "#FF33A6",  # Pink
-            "#FF8C33",  # Orange
-            "#8C33FF",  # Purple
-            "#33FFF0",  # Aqua
-            "#FF33F0",  # Magenta
-            "#33FF8C",  # Mint Green
-            "#FF3333",  # Red
-            "#FFFF33",  # Yellow
-            "#33FFFF",  # Cyan
-            "#5733FF",  # Indigo
-            "#33FF57",  # Light Green
-            "#FF5733",  # Coral
-            "#FF33FF",  # Fuchsia
-            "#57FF33",  # Spring Green
-            "#5733FF",  # Blue Violet
-            "#FF3357",  # Reddish Pink
-            "#8CFF33"   # Chartreuse
+        hex_colors = [
+            "#FF0000",  # Red
+            "#00FF00",  # Green
+            "#0000FF",  # Blue
+            "#FFFF00",  # Yellow
+            "#00FFFF",  # Cyan
+            "#FF00FF",  # Magenta
+            "#800000",  # Maroon
+            "#808000",  # Olive
+            "#008080",  # Teal
+            "#800080",  # Purple
+            "#808080"   # Gray
         ]
         box_colors = box_colors[:self.batch_size]
         box_colors = list(map(util.colorcode_to_number, box_colors))
@@ -175,7 +163,7 @@ class Model(torch.nn.Module):
         log.title("TRAINING DONE")
 
     def summarize_loss(self, loss):
-        """Summarize loss"""
+        """Summarize loss by applying the predefined weights from the options."""
         loss_all = 0.
         assert "all" not in loss
         # weigh losses
@@ -201,11 +189,11 @@ class Model(torch.nn.Module):
         loss.all.backward()
         self.optim.step()
         # after train iteration
-        if (self.it+1) % self.opt.freq.scalar==0:
+        if (self.it + 1) % self.opt.freq.scalar == 0:
             if self.tb:
-                self.log_scalars(loss, step=self.it+1, split="train")
-        if (self.it+1) % self.opt.freq.vis==0:
-            self.visualize(var, step=self.it+1, split="train")
+                self.log_scalars(loss, step=self.it + 1, split="train")
+        if (self.it + 1 ) % self.opt.freq.vis == 0:
+            self.visualize(var, step=self.it + 1, split="train")
         self.it += 1
         loader.set_postfix(it=self.it, loss=f"{loss.all:.3f}")
         self.timer.it_end = time.time()
@@ -213,55 +201,9 @@ class Model(torch.nn.Module):
         self.graph.neural_image.progress.data.fill_(self.it / self.opt.max_iter)
         return loss
 
-    def visualize_patches(self, warp_param):
-        """"Visualize current homography estimation for each image"""
-        image_pil = torchvision_F.to_pil_image(self.images.gt).convert("RGBA")
-        draw_pil = PIL.Image.new("RGBA", image_pil.size, (0, 0, 0, 0))
-        draw = PIL.ImageDraw.Draw(draw_pil)
-        # compute corners of each homography
-        corners_all = self.warp.warp_corners(warp_param)
-        corners_all[..., 0] = (
-            corners_all[..., 0] / self.opt.W * max(self.opt.H, self.opt.W) + 1
-            ) / 2 * self.opt.W - 0.5
-        corners_all[..., 1] = (
-            corners_all[..., 1] / self.opt.H * max(self.opt.H, self.opt.W) + 1
-            ) / 2 * self.opt.H - 0.5
-        # draw warped squares of each patch onto canvas
-        for i, corners in enumerate(corners_all):
-            p = [tuple(float(n) for n in corners[j]) for j in range(4)]
-            draw.line([p[0], p[1], p[2], p[3], p[0]], fill=tuple(self.box_colors[i]), width=3)
-        # merge canvas with image (ground truth image)
-        image_pil.alpha_composite(draw_pil)
-        image_tensor = torchvision_F.to_tensor(image_pil.convert("RGB"))
-        return image_tensor
-
-    @torch.no_grad()
-    def validate(self,opt,ep=None):
-        """docstring"""
-        self.graph.eval()
-        loss_val = edict()
-        loader = tqdm.tqdm(self.test_loader,desc="validating",leave=False)
-        for it,batch in enumerate(loader):
-            var = edict(batch)
-            var = util.move_to_device(var,opt.device)
-            var = self.graph.forward(opt,var,mode="val")
-            loss = self.graph.compute_loss(opt,var,mode="val")
-            loss = self.summarize_loss(loss)
-            for key in loss:
-                loss_val.setdefault(key,0.)
-                loss_val[key] += loss[key]*len(var.idx)
-            loader.set_postfix(loss=f"{loss.all:.3f}")
-            if it==0:
-                self.visualize(var,step=ep,split="val")
-        for key in loss_val:
-            loss_val[key] /= len(self.test_data)
-        if self.tb:
-            self.log_scalars(opt,loss_val,step=ep,split="val")
-        # log.loss_val(loss_val.all)
-
     @torch.no_grad()
     def predict_entire_image(self):
-        """Predict entire image"""
+        """Retrieve the full size image from the implicit neural image function"""
         xy_grid = self.warp.get_normalized_pixel_grid()[:1]
         rgb = self.graph.neural_image.forward(xy_grid) # [B, HW, 3]
         image = rgb.view(self.opt.H, self.opt.W, 3).detach().cpu().permute(2, 0, 1)
@@ -269,7 +211,7 @@ class Model(torch.nn.Module):
 
     @torch.no_grad()
     def log_scalars(self, loss, metric=None, step=0, split="train"):
-        """log scalars"""
+        """Log scalar values into the tensorboard instance"""
         for key,value in loss.items():
             if key=="all":
                 continue
@@ -284,13 +226,12 @@ class Model(torch.nn.Module):
 
     @torch.no_grad()
     def visualize(self, var, step=0, split="train"):
-        """visualize"""
+        """Perform preparations for the training visualization after completion of the rendering and load
+        current prediction images into tensorboard"""
         # dump frames for writing to video
-        frame = self.visualize_patches(self.graph.warp_param.weight) # upper image
-        frame2 = self.predict_entire_image() # prediction, lower image
-        # vertically align the images and cast them to valid values [0...255]
-        frame_cat = (torch.cat([frame, frame2], dim=1)*255).byte().permute(1, 2, 0).numpy()
-        imageio.imsave(f"{self.vis_path}/{self.vis_it}.png", frame_cat)
+        frame = self.predict_entire_image()
+        frame = (frame * 255).byte().permute(1, 2, 0).numpy()
+        imageio.imsave(f"{self.vis_path}/{self.vis_it}.png", frame)
 
         self.vis_it += 1
         # visualize in Tensorboard
@@ -315,7 +256,7 @@ class Model(torch.nn.Module):
                     self.opt, self.tb, self.it+1, "train", "predicted_edges", edge_formed
                     )
 
-# ============================ computation graph for forward/backprop ============================
+# ============================ Computation Graph for forward/backprop ============================
 
 class Graph(torch.nn.Module):
     """Graph for planar BARF
@@ -351,17 +292,18 @@ class Graph(torch.nn.Module):
             self.embedding_view = torch.nn.Embedding(self.opt.N_vocab, 128)
 
     def forward(self, var, mode=None): # pylint: disable=unused-argument
-        """Get image prediction given the current homographies"""
+        """Get image and mask predictions given the current homographies"""
         xy_grid = self.warp.get_normalized_pixel_grid(crop=self.opt.use_cropped_images)
-        # warp grid according to warp_param.weight homographies for each image.
+        ############ Neural Image Prediction ###########################
         xy_grid_warped = self.warp.warp_grid(xy_grid, self.warp_param.weight)
-        # get rgb image prediction for the warped 2d area
         var.rgb_prediction = self.neural_image.forward(xy_grid_warped) # [B, HW, 3]
         var.rgb_prediction_map = var.rgb_prediction.view(self.batch_size, int(self.h), int(self.w), 3).permute(0, 3, 1, 2) # [B, 3, H, W]
         var.edge_prediction = inputs.compute_edges(var.rgb_prediction_map, self.opt.device) # [B, 3, H, W]
+        ############ Implicit Mask Generation ##########################
         masks = []
         if self.opt.use_implicit_mask:
             for i, im in enumerate(var.images.rgb):
+                # Prepare the input for the implicit mask network(s)
                 flattened_image = im.long().view(3, -1).permute(1, 0)
                 uv_embedded = self.embedding_uv(xy_grid[0])
                 view_embedded = self.embedding_view(flattened_image).view(180, 240, 3, -1)
@@ -376,7 +318,7 @@ class Graph(torch.nn.Module):
         return var
 
     def compute_loss(self, var, mode=None): # pylint: disable=unused-argument
-        """Compute Loss"""
+        """Compute Losses"""
         loss = edict()
         # Influence factor for edge alignment and rgb alignment in loss
         alpha = self.opt.alpha_initial + (self.opt.alpha_final - self.opt.alpha_initial) * (self.it / self.max_iter) if self.opt.use_edges else 0
@@ -394,7 +336,7 @@ class Graph(torch.nn.Module):
             loss.render = \
                 (1 - alpha) * rgb_loss + \
                 0.5 * mask_loss + \
-                (alpha) * edge_loss 
+                (alpha) * edge_loss
 
             loss.rgb = rgb_loss
             loss.mask = mask_loss
@@ -476,7 +418,7 @@ class NeuralImageFunction(torch.nn.Module):
         ll = self.opt.arch.posenc.L_2D
         shape = coord_2d.shape
         # create sin/cos array of fitting size for the input
-        freq = 2**torch.arange(ll, dtype=torch.float32, device=self.opt.device)*np.pi # [ll]
+        freq = 2**torch.arange(ll, dtype=torch.float32, device=self.opt.device) * np.pi # [ll]
         spectrum = coord_2d[..., None]*freq # [B, ..., N, L]
         sin, cos = spectrum.sin(), spectrum.cos() # [B, ..., N, L]
         input_enc = torch.stack([sin, cos], dim=-2) # [B, ..., N, 2, L]
@@ -485,18 +427,18 @@ class NeuralImageFunction(torch.nn.Module):
         if self.opt.barf_c2f is not None:
             # set weights for different frequency bands
             start, end = self.opt.barf_c2f
-            alpha = (self.progress.data-start)/(end-start)*ll
+            alpha = (self.progress.data - start) / (end - start) * ll
             k = torch.arange(ll, dtype=torch.float32, device=self.opt.device)
-            weight = (1-(alpha-k).clamp_(min=0, max=1).mul_(np.pi).cos_())/2
+            weight = (1 - (alpha - k).clamp_(min=0, max=1).mul_(np.pi).cos_()) / 2
             # apply weights
             shape = input_enc.shape
-            input_enc = (input_enc.view(-1, ll)*weight).view(*shape)
+            input_enc = (input_enc.view(-1, ll) * weight).view(*shape)
         return input_enc
 
 # ============================ Implicit Mask Generation ============================
 
 class ImplicitMask(torch.nn.Module):
-    # TODO: Choose correct latent and in channel dimensions
+    """Neural Image Function for Masks Generated during training process"""
     def __init__(self, latent=3*128, W=256, in_channels_dir=42):
         super().__init__()
         self.mask_mapping = nn.Sequential(
@@ -512,6 +454,7 @@ class ImplicitMask(torch.nn.Module):
 
 
 class PosEmbedding(torch.nn.Module):
+    """Positional Encoding Network"""
     def __init__(self, max_logscale, N_freqs, logscale=True):
         """
         Defines a function that embeds x to (x, sin(2^k x), cos(2^k x), ...)
