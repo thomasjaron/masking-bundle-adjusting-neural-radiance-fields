@@ -104,7 +104,7 @@ class Model(torch.nn.Module):
             self.tb = torch.utils.tensorboard.SummaryWriter(log_dir=self.opt.output_path, flush_secs=10)
 
         # Prepare homography visualization
-        hex_colors = [
+        box_colors = [
             "#FF0000",  # Red
             "#00FF00",  # Green
             "#0000FF",  # Blue
@@ -230,8 +230,7 @@ class Model(torch.nn.Module):
         current prediction images into tensorboard"""
         # dump frames for writing to video
         frame = self.predict_entire_image()
-        frame = (frame * 255).byte().permute(1, 2, 0).numpy()
-        imageio.imsave(f"{self.vis_path}/{self.vis_it}.png", frame)
+        imageio.imsave(f"{self.vis_path}/{self.vis_it}.png", (frame * 255).byte().permute(1, 2, 0).numpy())
 
         self.vis_it += 1
         # visualize in Tensorboard
@@ -241,7 +240,7 @@ class Model(torch.nn.Module):
                 self.opt, self.tb, self.it+1, "train", "input_images", util_vis.color_border(var.images.rgb, colors) # pylint: disable=line-too-long
                 )
             util_vis.tb_image(
-                self.opt, self.tb, self.it+1, "train", "predicted_image", frame2[None]
+                self.opt, self.tb, self.it+1, "train", "predicted_image", frame[None]
                 )
             # Print out Masks
             if self.opt.use_implicit_mask:
@@ -331,8 +330,8 @@ class Graph(torch.nn.Module):
             edge_loss = self.mse_loss(
                 var.edge_prediction,
                 var.images.edges,
-                var.mask_prediction_map if self.opt.use_implicit_mask else var.images.masks_eroded) if self.opt.use_edges else 0
-            mask_loss = ((1 - var.mask_prediction_map.contiguous())**2).mean() if self.opt.use_implicit_mask else 0
+                var.mask_prediction_map if self.opt.use_implicit_mask else var.images.masks_eroded) if self.opt.use_edges else torch.tensor(0)
+            mask_loss = ((1 - var.mask_prediction_map.contiguous())**2).mean() if self.opt.use_implicit_mask else torch.tensor(0)
             loss.render = \
                 (1 - alpha) * rgb_loss + \
                 0.5 * mask_loss + \
