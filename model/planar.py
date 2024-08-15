@@ -25,6 +25,9 @@ from warp import Warp
 
 import matplotlib.pyplot as plt
 
+import scipy.io
+import kornia
+
 # ============================ main engine for training and evaluation ============================
 
 class Model(torch.nn.Module):
@@ -53,6 +56,7 @@ class Model(torch.nn.Module):
         self.timer = None
         self.warp_pert = None
         self.ep = self.it = self.vis_it = 0
+        self.gt_hom = None
 
     def load_dataset(self):
         """Load all images and other inputs."""
@@ -70,6 +74,13 @@ class Model(torch.nn.Module):
             fp_gt=f'data/planar/{self.dataset}/gt.png',
             edges = True if self.opt.use_edges else None
             )
+        self.gt_hom = torch.stack([
+            torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_1.mat')),
+            torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_2.mat')),
+            torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_3.mat')),
+            torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_4.mat')),
+            torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_5.mat'))
+        ])
 
     def build_networks(self):
         """Builds Network"""
@@ -221,6 +232,37 @@ class Model(torch.nn.Module):
             for key,value in metric.items():
                 self.tb.add_scalar(f"{split}/{key}",value,step)
         # compute PSNR
+        print("warp_param weight shape:", self.graph.warp_param.weight.shape)
+        print("gt_hom shape:", self.gt_hom.shape)
+        
+        # Convert warp_param.weight to homography matrix form
+        warp_matrices = torch.zeros((5, 3, 3), dtype=self.graph.warp_param.weight.dtype)
+        warp_matrices[:, 0, 0] = self.graph.warp_param.weight[:, 0]
+        warp_matrices[:, 0, 1] = self.graph.warp_param.weight[:, 1]
+        warp_matrices[:, 0, 2] = self.graph.warp_param.weight[:, 2]
+        warp_matrices[:, 1, 0] = self.graph.warp_param.weight[:, 3]
+        warp_matrices[:, 1, 1] = self.graph.warp_param.weight[:, 4]
+        warp_matrices[:, 1, 2] = self.graph.warp_param.weight[:, 5]
+        warp_matrices[:, 2, 0] = self.graph.warp_param.weight[:, 6]
+        warp_matrices[:, 2, 1] = self.graph.warp_param.weight[:, 7]
+        warp_matrices[:, 2, 2] = 1.0  # Homogeneous coordinate
+        
+        # Normalize homographies from pixel to normalized coordinates [-1, +1]
+        norm_warp_matrices = kornia.geometry.conversions.normalize_homography(warp_matrices, (360, 480),(360, 480))
+        norm_gt_hom = kornia.geometry.conversions.normalize_homography(self.gt_hom, (360, 480),(360, 480))
+        print(f"warp_matrices {warp_matrices}")
+        print(f"gt_hom {self.gt_hom}")
+        #warp_error = (self.graph.warp_param.weight-self.gt_hom).norm(dim=-1).mean()
+        #warp_error = (warp_matrices-self.gt_hom).norm(dim=-1).mean()
+        #norm_warp_matrices = kornia.geometry.conversions.normalize_homography(warp_matrices, [-1,+1], [-1,+1])
+        #norm_gt_hom = kornia.geometry.conversions.normalize_homography(self.gt_hom, [0,479], [0,359])
+        print(f"norm_warp_matrices {norm_warp_matrices}")
+        print(f"norm_gt_hom {norm_gt_hom}")
+        warp_error = ((norm_warp_matrices / torch.det(norm_warp_matrices).abs().pow(1/3).unsqueeze(-1).unsqueeze(-1)) -
+                    (norm_gt_hom / torch.det(norm_gt_hom).abs().pow(1/3).unsqueeze(-1).unsqueeze(-1))).norm(dim=(1, 2)).mean()
+        #warp_error = (norm_warp_matrices-norm_gt_hom).norm(dim=-1).mean()
+        print(f"warp_error {warp_error}")
+        self.tb.add_scalar(f"{split}/Homography_Error", warp_error, step)
         psnr = -10 * loss.render.log10()
         self.tb.add_scalar(f"{split}/PSNR", psnr, step)
 
