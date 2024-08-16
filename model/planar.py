@@ -30,6 +30,7 @@ import kornia
 
 # ============================ main engine for training and evaluation ============================
 
+
 class Model(torch.nn.Module):
     """DL Model for Planar BARF"""
 
@@ -69,10 +70,11 @@ class Model(torch.nn.Module):
         ]
         self.images = inputs.prepare_images(
             self.opt,
-            fps_images=image_paths,
+            fps_images=image_paths, #filepaths
             fps_masks=mask_paths if (self.opt.use_masks and not self.opt.use_implicit_mask) else None,
             fp_gt=f'data/planar/{self.dataset}/gt.png',
             edges = True if self.opt.use_edges else None
+            #fps_hom = #von 1 bis 5 anstatt 0bis4
             )
         self.gt_hom = torch.stack([
             torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_1.mat')),
@@ -211,6 +213,34 @@ class Model(torch.nn.Module):
         util.update_timer(self.opt, self.timer, self.ep, len(loader))
         self.graph.neural_image.progress.data.fill_(self.it / self.opt.max_iter)
         return loss
+    
+    def sl3_to_SL3(self, h):
+        # Convert the homography to SL(3) format (8-dimensional vector)
+        h1, h2, h3, h4, h5, h6, h7, h8 = h.chunk(8, dim=-1)
+        A = torch.stack([
+            torch.cat([h5, h3, h1], dim=-1),
+            torch.cat([h4, -h5-h6, h2], dim=-1),
+            torch.cat([h7, h8, h6], dim=-1)
+        ], dim=-2)
+        H = A.matrix_exp()
+        return H
+    
+    
+    def process_homography(self, gt_hom):
+        # Assuming gt_hom is a tensor of shape [batch_size, 3, 3]
+        dsize_src = (480, 360)
+        dsize_dst = (480, 360)
+        
+        # Normalize the homography
+        gt_hom_normalized = kornia.geometry.conversions.normalize_homography(gt_hom, dsize_src, dsize_dst)
+        
+        # Ensure the bottom-right entry is 1
+        gt_hom_normalized = gt_hom_normalized / gt_hom_normalized[..., 2, 2].unsqueeze(-1).unsqueeze(-1)
+        
+        # Convert to 8-dimensional vectors
+        h_vectors = torch.stack([self.SL3_to_sl3(H) for H in gt_hom_normalized])
+        
+        return h_vectors
 
     @torch.no_grad()
     def predict_entire_image(self):
@@ -235,32 +265,17 @@ class Model(torch.nn.Module):
         print("warp_param weight shape:", self.graph.warp_param.weight.shape)
         print("gt_hom shape:", self.gt_hom.shape)
         
-        # Convert warp_param.weight to homography matrix form
-        warp_matrices = torch.zeros((5, 3, 3), dtype=self.graph.warp_param.weight.dtype)
-        warp_matrices[:, 0, 0] = self.graph.warp_param.weight[:, 0]
-        warp_matrices[:, 0, 1] = self.graph.warp_param.weight[:, 1]
-        warp_matrices[:, 0, 2] = self.graph.warp_param.weight[:, 2]
-        warp_matrices[:, 1, 0] = self.graph.warp_param.weight[:, 3]
-        warp_matrices[:, 1, 1] = self.graph.warp_param.weight[:, 4]
-        warp_matrices[:, 1, 2] = self.graph.warp_param.weight[:, 5]
-        warp_matrices[:, 2, 0] = self.graph.warp_param.weight[:, 6]
-        warp_matrices[:, 2, 1] = self.graph.warp_param.weight[:, 7]
-        warp_matrices[:, 2, 2] = 1.0  # Homogeneous coordinate
-        
-        # Normalize homographies from pixel to normalized coordinates [-1, +1]
-        norm_warp_matrices = kornia.geometry.conversions.normalize_homography(warp_matrices, (360, 480),(360, 480))
-        norm_gt_hom = kornia.geometry.conversions.normalize_homography(self.gt_hom, (360, 480),(360, 480))
-        print(f"warp_matrices {warp_matrices}")
-        print(f"gt_hom {self.gt_hom}")
-        #warp_error = (self.graph.warp_param.weight-self.gt_hom).norm(dim=-1).mean()
-        #warp_error = (warp_matrices-self.gt_hom).norm(dim=-1).mean()
-        #norm_warp_matrices = kornia.geometry.conversions.normalize_homography(warp_matrices, [-1,+1], [-1,+1])
-        #norm_gt_hom = kornia.geometry.conversions.normalize_homography(self.gt_hom, [0,479], [0,359])
-        print(f"norm_warp_matrices {norm_warp_matrices}")
-        print(f"norm_gt_hom {norm_gt_hom}")
-        warp_error = ((norm_warp_matrices / torch.det(norm_warp_matrices).abs().pow(1/3).unsqueeze(-1).unsqueeze(-1)) -
-                    (norm_gt_hom / torch.det(norm_gt_hom).abs().pow(1/3).unsqueeze(-1).unsqueeze(-1))).norm(dim=(1, 2)).mean()
-        #warp_error = (norm_warp_matrices-norm_gt_hom).norm(dim=-1).mean()
+        #gt_hom = self.gt_hom.float()
+        h_vectors = Model.process_homography(self.gt_hom.float())
+
+        print("warp_param weight shape:", self.graph.warp_param.weight.shape)
+        print("h_vectors shape:", h_vectors.shape)
+                                           
+        warp_error = (self.graph.warp_param.weight-h_vectors).norm(dim=-1).mean()
+
+        # warp_error = ((norm_warp_matrices / torch.det(norm_warp_matrices).abs().pow(1/3).unsqueeze(-1).unsqueeze(-1)) -
+        #             (norm_gt_hom / torch.det(norm_gt_hom).abs().pow(1/3).unsqueeze(-1).unsqueeze(-1))).norm(dim=(1, 2)).mean()
+
         print(f"warp_error {warp_error}")
         self.tb.add_scalar(f"{split}/Homography_Error", warp_error, step)
         psnr = -10 * loss.render.log10()
