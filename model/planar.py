@@ -214,28 +214,43 @@ class Model(torch.nn.Module):
         self.graph.neural_image.progress.data.fill_(self.it / self.opt.max_iter)
         return loss
     
-    def sl3_to_SL3(self, h):
-        # Convert the homography to SL(3) format (8-dimensional vector)
-        h1, h2, h3, h4, h5, h6, h7, h8 = h.chunk(8, dim=-1)
-        A = torch.stack([
-            torch.cat([h5, h3, h1], dim=-1),
-            torch.cat([h4, -h5-h6, h2], dim=-1),
-            torch.cat([h7, h8, h6], dim=-1)
-        ], dim=-2)
-        H = A.matrix_exp()
-        return H
-    
+    def SL3_to_sl3(self, H):
+        """
+        Converts a 3x3 homography matrix to an 8-dimensional vector.
+        
+        Args:
+            H (torch.Tensor): A homography matrix of shape [batch_size, 3, 3].
+
+        Returns:
+            torch.Tensor: A tensor of shape [batch_size, 8].
+        """
+        # Extract elements from the 3x3 matrix that correspond to the original 8 elements
+        h1 = H[..., 0, 2]
+        h2 = H[..., 1, 2]
+        h3 = H[..., 0, 1]
+        h4 = H[..., 1, 0]
+        h5 = H[..., 0, 0]
+        h6 = -H[..., 1, 1] - h5
+        h7 = H[..., 2, 0]
+        h8 = H[..., 2, 1]
+        
+        # Stack them into an 8-dimensional vector
+        h_vector = torch.stack([h1, h2, h3, h4, h5, h6, h7, h8], dim=-1)
+        
+        return h_vector
     
     def process_homography(self, gt_hom):
         # Assuming gt_hom is a tensor of shape [batch_size, 3, 3]
         dsize_src = (480, 360)
         dsize_dst = (480, 360)
         
+        
         # Normalize the homography
         gt_hom_normalized = kornia.geometry.conversions.normalize_homography(gt_hom, dsize_src, dsize_dst)
         
         # Ensure the bottom-right entry is 1
         gt_hom_normalized = gt_hom_normalized / gt_hom_normalized[..., 2, 2].unsqueeze(-1).unsqueeze(-1)
+        print(gt_hom_normalized.size())
         
         # Convert to 8-dimensional vectors
         h_vectors = torch.stack([self.SL3_to_sl3(H) for H in gt_hom_normalized])
@@ -264,12 +279,16 @@ class Model(torch.nn.Module):
         # compute PSNR
         print("warp_param weight shape:", self.graph.warp_param.weight.shape)
         print("gt_hom shape:", self.gt_hom.shape)
-        
-        #gt_hom = self.gt_hom.float()
-        h_vectors = Model.process_homography(self.gt_hom.float())
+            
+        # Move gt_hom to the same device as warp_param.weight
+        device = self.graph.warp_param.weight.device
+        gt_hom = self.gt_hom.float().to(device)
 
-        print("warp_param weight shape:", self.graph.warp_param.weight.shape)
-        print("h_vectors shape:", h_vectors.shape)
+        # Process homography
+        h_vectors = self.process_homography(gt_hom)
+
+        print("warp_param weight shape:", self.graph.warp_param.weight)
+        print("h_vectors shape:", h_vectors)
                                            
         warp_error = (self.graph.warp_param.weight-h_vectors).norm(dim=-1).mean()
 
@@ -278,6 +297,7 @@ class Model(torch.nn.Module):
 
         print(f"warp_error {warp_error}")
         self.tb.add_scalar(f"{split}/Homography_Error", warp_error, step)
+        # compute PSNR
         psnr = -10 * loss.render.log10()
         self.tb.add_scalar(f"{split}/PSNR", psnr, step)
 
