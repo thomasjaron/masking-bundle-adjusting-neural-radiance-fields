@@ -27,8 +27,34 @@ import matplotlib.pyplot as plt
 
 import scipy.io
 import kornia
+import scipy.linalg
 
-# ============================ main engine for training and evaluation ============================
+
+
+def adjoint(A, E, f):
+    A_H = A.T.conj().to(E.dtype)
+    n = A.size(0)
+    M = torch.zeros(2*n, 2*n, dtype=E.dtype, device=E.device)
+    M[:n, :n] = A_H
+    M[n:, n:] = A_H
+    M[:n, n:] = E
+    return f(M)[:n, n:].to(A.dtype)
+
+def logm_scipy(A):
+    return torch.from_numpy(scipy.linalg.logm(A.cpu(), disp=False)[0]).to(A.device)
+
+class Logm(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, A):
+        assert A.ndim == 2 and A.size(0) == A.size(1)  # Square matrix
+        assert A.dtype in (torch.float32, torch.float64, torch.complex64, torch.complex128)
+        ctx.save_for_backward(A)
+        return logm_scipy(A)
+
+    @staticmethod
+    def backward(ctx, G):
+        A, = ctx.saved_tensors
+        return adjoint(A, G, logm_scipy)
 
 
 class Model(torch.nn.Module):
@@ -58,6 +84,7 @@ class Model(torch.nn.Module):
         self.warp_pert = None
         self.ep = self.it = self.vis_it = 0
         self.gt_hom = None
+        self.logm = Logm.apply
 
     def load_dataset(self):
         """Load all images and other inputs."""
@@ -224,15 +251,20 @@ class Model(torch.nn.Module):
         Returns:
             torch.Tensor: A tensor of shape [batch_size, 8].
         """
+
+        log_matrices = self.logm(H)
+
+        print(f"Hello this is log_matrices {log_matrices}")
+
         # Extract elements from the 3x3 matrix that correspond to the original 8 elements
-        h1 = H[..., 0, 2]
-        h2 = H[..., 1, 2]
-        h3 = H[..., 0, 1]
-        h4 = H[..., 1, 0]
-        h5 = H[..., 0, 0]
-        h6 = -H[..., 1, 1] - h5
-        h7 = H[..., 2, 0]
-        h8 = H[..., 2, 1]
+        h1 = log_matrices[..., 0, 2]
+        h2 = log_matrices[..., 1, 2]
+        h3 = log_matrices[..., 0, 1]
+        h4 = log_matrices[..., 1, 0]
+        h5 = log_matrices[..., 0, 0]
+        h6 = -log_matrices[..., 1, 1] - h5
+        h7 = log_matrices[..., 2, 0]
+        h8 = log_matrices[..., 2, 1]
         
         # Stack them into an 8-dimensional vector
         h_vector = torch.stack([h1, h2, h3, h4, h5, h6, h7, h8], dim=-1)
@@ -250,12 +282,16 @@ class Model(torch.nn.Module):
         
         # Ensure the bottom-right entry is 1
         gt_hom_normalized = gt_hom_normalized / gt_hom_normalized[..., 2, 2].unsqueeze(-1).unsqueeze(-1)
-        print(gt_hom_normalized.size())
+
+        gt_hom_normalized_SL3 = gt_hom_normalized / gt_hom_normalized.det().pow(1.0 / 3.0).unsqueeze(-1).unsqueeze(-1)
+
+        print(gt_hom_normalized_SL3.size())
         
         # Convert to 8-dimensional vectors
         h_vectors = torch.stack([self.SL3_to_sl3(H) for H in gt_hom_normalized])
         
         return h_vectors
+    
 
     @torch.no_grad()
     def predict_entire_image(self):
