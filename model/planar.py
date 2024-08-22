@@ -85,6 +85,7 @@ class Model(torch.nn.Module):
         self.ep = self.it = self.vis_it = 0
         self.gt_hom = None
         self.logm = Logm.apply
+        self.keypoint_matrix = None
 
     def load_dataset(self):
         """Load all images and other inputs."""
@@ -327,9 +328,6 @@ class Model(torch.nn.Module):
         print("h_vectors shape:", h_vectors)
                                            
         warp_error = (self.graph.warp_param.weight-h_vectors).norm(dim=-1).mean()
-
-        # warp_error = ((norm_warp_matrices / torch.det(norm_warp_matrices).abs().pow(1/3).unsqueeze(-1).unsqueeze(-1)) -
-        #             (norm_gt_hom / torch.det(norm_gt_hom).abs().pow(1/3).unsqueeze(-1).unsqueeze(-1))).norm(dim=(1, 2)).mean()
 
         print(f"warp_error {warp_error}")
         self.tb.add_scalar(f"{split}/Homography_Error", warp_error, step)
