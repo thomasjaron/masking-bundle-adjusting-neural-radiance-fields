@@ -93,8 +93,32 @@ def erode_images(images_tensor, device, kernel=(5, 5)):
         processed_images.append(i)
     return torch.stack(processed_images)
 
+def load_homography(fps, device):
+    """Loads a set of homography matrices into a tensor from a list of file pointers.
+    Given the device, it saves these homographies to either CPU or GPU."""
+    if not fps:
+        return None
+    if not isinstance(fps, list):
+        raise TypeError("Function requires a list of input file paths!")
+    
+    loaded_homographies = []
+    for fp in fps:
+        homography = np.loadtxt(fp)
+        homography_tensor = torch.tensor(homography, dtype=torch.float32).to(device)
+        loaded_homographies.append(homography_tensor)
+    
+    return torch.stack(loaded_homographies)
 
-def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, edges=True):
+    # self.gt_hom = torch.stack([
+    #     torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_1.mat')),
+    #     torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_2.mat')),
+    #     torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_3.mat')),
+    #     torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_4.mat')),
+    #     torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_5.mat'))
+    # ])
+
+
+def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, edges=True, fps_hom=None):
     """Load distorted and occluded images used for reconstruction.
     This function assumes a 
     """
@@ -103,6 +127,8 @@ def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, edges=True)
     inputs.gt = load_single_image(fp_gt, opt.device)
     # load images from dataset
     inputs.rgb = load_images(fps_images, opt)
+    # Load homographies
+    inputs.gt_hom = load_homography(fps_hom, opt.device)
     # Invert loaded masks (SIDAR Dataset sets occlusions to 1)
     inputs.masks = load_images(fps_masks, opt, mode='L', invert_gray=True)
     inputs.masks_eroded = erode_images(inputs.masks, opt.device, kernel=(5,5)) if (inputs.masks is not None) else None
@@ -115,6 +141,8 @@ def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, edges=True)
 
     return inputs
 
+"""
+NOT YET IMPLEMENTED
 def calculate_keypoints(images):
     # Load LoFTR model with configuration
     cfg = deepcopy(default_cfg)
@@ -153,3 +181,4 @@ def calculate_keypoints(images):
         print(f"There are {num_keypoints} keypoints between image pair ({i}, {j})")
 
     return keypoint_counts
+"""

@@ -22,6 +22,7 @@ import util
 import util_vis
 from util import log
 from warp import Warp
+from warp import Lie
 
 import matplotlib.pyplot as plt
 
@@ -96,21 +97,18 @@ class Model(torch.nn.Module):
         mask_paths = [
             f'data/planar/{self.dataset}/{i}-m.png' for i in range(self.batch_size)
         ]
+        hom_paths = [
+            f'data/planar/{self.dataset}/H_0_{i+1}.mat' for i in range(self.batch_size)
+        ]
         self.images = inputs.prepare_images(
             self.opt,
             fps_images=image_paths, #filepaths
             fps_masks=mask_paths if (self.opt.use_masks and not self.opt.use_implicit_mask) else None,
             fp_gt=f'data/planar/{self.dataset}/gt.png',
-            edges = True if self.opt.use_edges else None
-            #fps_hom = #von 1 bis 5 anstatt 0bis4
+            edges = True if self.opt.use_edges else None,
+            fps_hom = hom_paths
             )
-        self.gt_hom = torch.stack([
-            torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_1.mat')),
-            torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_2.mat')),
-            torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_3.mat')),
-            torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_4.mat')),
-            torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_5.mat'))
-        ])
+
 
     def build_networks(self):
         """Builds Network"""
@@ -255,7 +253,7 @@ class Model(torch.nn.Module):
 
         log_matrices = self.logm(H)
 
-        print(f"Hello this is log_matrices {log_matrices}")
+        #print(f"Hello this is log_matrices {log_matrices}")
 
         # Extract elements from the 3x3 matrix that correspond to the original 8 elements
         h1 = log_matrices[..., 0, 2]
@@ -280,16 +278,17 @@ class Model(torch.nn.Module):
         
         # Normalize the homography
         gt_hom_normalized = kornia.geometry.conversions.normalize_homography(gt_hom, dsize_src, dsize_dst)
+        print(f"normalized {gt_hom_normalized}")
         
         # Ensure the bottom-right entry is 1
         gt_hom_normalized = gt_hom_normalized / gt_hom_normalized[..., 2, 2].unsqueeze(-1).unsqueeze(-1)
 
         gt_hom_normalized_SL3 = gt_hom_normalized / gt_hom_normalized.det().pow(1.0 / 3.0).unsqueeze(-1).unsqueeze(-1)
 
-        print(gt_hom_normalized_SL3.size())
+        #print(gt_hom_normalized_SL3.size())
         
         # Convert to 8-dimensional vectors
-        h_vectors = torch.stack([self.SL3_to_sl3(H) for H in gt_hom_normalized])
+        h_vectors = torch.stack([self.SL3_to_sl3(H) for H in gt_hom_normalized_SL3])
         
         return h_vectors
     
@@ -313,24 +312,34 @@ class Model(torch.nn.Module):
         if metric is not None:
             for key,value in metric.items():
                 self.tb.add_scalar(f"{split}/{key}",value,step)
-        # compute PSNR
-        print("warp_param weight shape:", self.graph.warp_param.weight.shape)
-        print("gt_hom shape:", self.gt_hom.shape)
-            
-        # Move gt_hom to the same device as warp_param.weight
-        device = self.graph.warp_param.weight.device
-        gt_hom = self.gt_hom.float().to(device)
 
-        # Process homography
-        h_vectors = self.process_homography(gt_hom)
 
-        print("warp_param weight shape:", self.graph.warp_param.weight)
-        print("h_vectors shape:", h_vectors)
-                                           
-        warp_error = (self.graph.warp_param.weight-h_vectors).norm(dim=-1).mean()
+        # #print("warp_param weight shape:", self.graph.warp_param.weight.shape)
+        # #print("gt_hom shape:", self.images.gt_hom.shape)
+        # # Move gt_hom to the same device as warp_param.weight
+        # device = self.graph.warp_param.weight.device
+        # gt_hom = self.images.gt_hom.float().to(device)
+        # # Process homography
+        # h_vectors = self.process_homography(gt_hom)
+        # #print(h_vectors)
+        # print("warp_param weight:", self.graph.warp_param.weight)
+        # print("h_vectors shape:", h_vectors)                               
+        # warp_error = (self.graph.warp_param.weight-h_vectors).norm(dim=-1).mean()
+        
+        gt_hom = self.images.gt_hom
+        gt_hom = kornia.geometry.conversions.normalize_homography(gt_hom, (480,360), (480,360))
+
+        warp_hom = Lie.sl3_to_SL3(self, self.graph.warp_param.weight)
+
+        print(f"gt_hom: {gt_hom}")
+        print(f"warp_hom: {warp_hom}")
+        
+        warp_error = (warp_hom-gt_hom).norm(dim=-1).mean()
 
         print(f"warp_error {warp_error}")
         self.tb.add_scalar(f"{split}/Homography_Error", warp_error, step)
+
+
         # compute PSNR
         psnr = -10 * loss.render.log10()
         self.tb.add_scalar(f"{split}/PSNR", psnr, step)
