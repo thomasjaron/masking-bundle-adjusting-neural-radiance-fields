@@ -137,7 +137,7 @@ def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, edges=True,
     inputs.gray = load_images(fps_images, opt, mode='L')
     # generate edge images
     inputs.edges = compute_edges(inputs.gray, opt.device) if edges else None
-    inputs.keypoint_matrix = calculate_keypoints(inputs.rgb)
+    #inputs.keypoint_matrix = calculate_keypoints(inputs.rgb)
 
     return inputs
 

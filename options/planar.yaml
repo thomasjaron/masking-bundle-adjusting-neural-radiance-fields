@@ -3,7 +3,7 @@ W: 480
 patch_H: 180
 patch_W: 240
 
-dataset: new                                    # directory containing images
+dataset: cat_batch5                                    # directory containing images
 
 # Mask Settings
 use_masks: True                                             # utilize premade masks in loss calculation
@@ -12,12 +12,13 @@ N_vocab: 1500                                               # vocabulary size fo
 build_single_masks: False                                    # build a separate mask for each input image instead of a generic mask for all images
 
 # RGB and Edge Settings
-use_edges: False                                             # align edges and calculate loss for that
-alpha_initial: 0.9                                         # alpha factor: make influence of edges and rgb alignment on the loss
+use_edges: True                                             # align edges and calculate loss for that
+alpha_initial: 0.0                                         # alpha factor: make influence of edges and rgb alignment on the loss
 alpha_final: 1.0                                           # dependant on the current iteration                                   
 use_cropped_images: True                                    # scale down input images to speed up calculation
 
 # default
+hom: False
 
 group: 0_test                                               # name of experiment group
 name: debug                                                 # name of experiment run

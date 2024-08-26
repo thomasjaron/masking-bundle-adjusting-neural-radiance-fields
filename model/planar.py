@@ -92,10 +92,10 @@ class Model(torch.nn.Module):
         """Load all images and other inputs."""
         log.info("loading dataset...")
         image_paths = [
-            f'data/planar/{self.dataset}/{i}.png' for i in range(self.batch_size)
+            f'data/planar/{self.dataset}/{i+1}.png' for i in range(self.batch_size)
         ]
         mask_paths = [
-            f'data/planar/{self.dataset}/{i}-m.png' for i in range(self.batch_size)
+            f'data/planar/{self.dataset}/{i+1}-m.png' for i in range(self.batch_size)
         ]
         hom_paths = [
             f'data/planar/{self.dataset}/H_0_{i+1}.mat' for i in range(self.batch_size)
@@ -106,7 +106,7 @@ class Model(torch.nn.Module):
             fps_masks=mask_paths if (self.opt.use_masks and not self.opt.use_implicit_mask) else None,
             fp_gt=f'data/planar/{self.dataset}/gt.png',
             edges = True if self.opt.use_edges else None,
-            fps_hom = hom_paths
+            fps_hom = hom_paths if self.opt.hom else None,
             )
 
 
@@ -325,19 +325,19 @@ class Model(torch.nn.Module):
         # print("warp_param weight:", self.graph.warp_param.weight)
         # print("h_vectors shape:", h_vectors)                               
         # warp_error = (self.graph.warp_param.weight-h_vectors).norm(dim=-1).mean()
+        if self.opt.hom:
+            gt_hom = self.images.gt_hom
+            gt_hom = kornia.geometry.conversions.normalize_homography(gt_hom, (480,360), (480,360))
+
+            warp_hom = Lie.sl3_to_SL3(self, self.graph.warp_param.weight)
+
+            print(f"gt_hom: {gt_hom}")
+            print(f"warp_hom: {warp_hom}")
         
-        gt_hom = self.images.gt_hom
-        gt_hom = kornia.geometry.conversions.normalize_homography(gt_hom, (480,360), (480,360))
+            warp_error = (warp_hom-gt_hom).norm(dim=-1).mean()
 
-        warp_hom = Lie.sl3_to_SL3(self, self.graph.warp_param.weight)
-
-        print(f"gt_hom: {gt_hom}")
-        print(f"warp_hom: {warp_hom}")
-        
-        warp_error = (warp_hom-gt_hom).norm(dim=-1).mean()
-
-        print(f"warp_error {warp_error}")
-        self.tb.add_scalar(f"{split}/Homography_Error", warp_error, step)
+            print(f"warp_error {warp_error}")
+            elf.tb.add_scalar(f"{split}/Homography_Error", warp_error, step)
 
 
         # compute PSNR
