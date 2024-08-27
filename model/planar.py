@@ -243,7 +243,7 @@ class Model(torch.nn.Module):
 
 
         # compute PSNR
-        psnr = -10 * loss.render.log10()
+        psnr = -10 * loss.rgb.log10()
         self.tb.add_scalar(f"{split}/PSNR", psnr, step)
 
     @torch.no_grad()
