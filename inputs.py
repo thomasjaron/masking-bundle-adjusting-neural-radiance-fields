@@ -8,19 +8,10 @@ import PIL.ImageOps
 import imageio
 import torchvision.transforms.functional as torchvision_F
 from easydict import EasyDict as edict
-from itertools import combinations
-#from kornia.feature import LoFTR
-from copy import deepcopy
-from src.loftr import LoFTR, default_cfg
-
-import matplotlib.cm as cm
-import matplotlib.pyplot as plt
-import matplotlib
-import itertools
-import imageio
 
 import cv2
 import numpy as np
+import kornia
 
 def load_images(fps, opt, mode='RGB', invert_gray=False):
     """Loads a set of images into a tensor from a list of file pointers.
@@ -93,7 +84,7 @@ def erode_images(images_tensor, device, kernel=(5, 5)):
         processed_images.append(i)
     return torch.stack(processed_images)
 
-def load_homography(fps, device):
+def load_homography(fps, width, height, device):
     """Loads a set of homography matrices into a tensor from a list of file pointers.
     Given the device, it saves these homographies to either CPU or GPU."""
     if not fps:
@@ -106,19 +97,12 @@ def load_homography(fps, device):
         homography = np.loadtxt(fp)
         homography_tensor = torch.tensor(homography, dtype=torch.float32).to(device)
         loaded_homographies.append(homography_tensor)
-    
-    return torch.stack(loaded_homographies)
+    gt_hom = torch.stack(loaded_homographies)
+    # Normalize them to range of [-1, +1] for comparisons to predicted homographies
+    norm_hom = kornia.geometry.conversions.normalize_homography(gt_hom, (width,height), (width,height))
+    return norm_hom
 
-    # self.gt_hom = torch.stack([
-    #     torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_1.mat')),
-    #     torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_2.mat')),
-    #     torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_3.mat')),
-    #     torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_4.mat')),
-    #     torch.tensor(np.loadtxt('data/planar/cat_batch2/H_0_5.mat'))
-    # ])
-
-
-def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, edges=True, fps_hom=None):
+def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, fps_hom=None, edges=True):
     """Load distorted and occluded images used for reconstruction.
     This function assumes a 
     """
@@ -127,8 +111,8 @@ def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, edges=True,
     inputs.gt = load_single_image(fp_gt, opt.device)
     # load images from dataset
     inputs.rgb = load_images(fps_images, opt)
-    # Load homographies
-    inputs.gt_hom = load_homography(fps_hom, opt.device)
+    # load homographies
+    inputs.gt_hom = load_homography(fps_hom, opt.W, opt.H, opt.device)
     # Invert loaded masks (SIDAR Dataset sets occlusions to 1)
     inputs.masks = load_images(fps_masks, opt, mode='L', invert_gray=True)
     inputs.masks_eroded = erode_images(inputs.masks, opt.device, kernel=(5,5)) if (inputs.masks is not None) else None
@@ -137,48 +121,5 @@ def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, edges=True,
     inputs.gray = load_images(fps_images, opt, mode='L')
     # generate edge images
     inputs.edges = compute_edges(inputs.gray, opt.device) if edges else None
-    #inputs.keypoint_matrix = calculate_keypoints(inputs.rgb)
 
     return inputs
-
-"""
-NOT YET IMPLEMENTED
-def calculate_keypoints(images):
-    # Load LoFTR model with configuration
-    cfg = deepcopy(default_cfg)
-    cfg['coarse']['temp_bug_fix'] = True
-    matcher = LoFTR(config=default_cfg)
-    matcher.load_state_dict(torch.load("weights/indoor_ds_new.ckpt")['state_dict'])
-    matcher = matcher.eval().cuda()
-
-    keypoint_counts = {}
-
-    for (i, img0), (j, img1) in itertools.combinations(enumerate(images), 2):
-        img0_raw = img0.detach().cpu().numpy().mean(axis=0).astype(np.uint8)
-        img1_raw = img1.detach().cpu().numpy().mean(axis=0).astype(np.uint8)
-
-        height, width = img0_raw.shape[:2]
-        new_width = (width // 8) * 8
-        new_height = (height // 8) * 8
-
-        img0_raw = cv2.resize(img0_raw, (new_width, new_height))
-        img1_raw = cv2.resize(img1_raw, (new_width, new_height))
-
-        img0_tensor = torch.from_numpy(img0_raw)[None][None].cuda() / 255.
-        img1_tensor = torch.from_numpy(img1_raw)[None][None].cuda() / 255.
-        batch = {'image0': img0_tensor, 'image1': img1_tensor}
-
-        # Inference with LoFTR
-        with torch.no_grad():
-            matcher(batch)
-            mkpts0 = batch['mkpts0_f'].cpu().numpy()
-            mkpts1 = batch['mkpts1_f'].cpu().numpy()
-            mconf = batch['mconf'].cpu().numpy()
-
-        num_keypoints = len(mkpts0)
-        # Convert tuple to string
-        keypoint_counts[f"{i},{j}"] = num_keypoints
-        print(f"There are {num_keypoints} keypoints between image pair ({i}, {j})")
-
-    return keypoint_counts
-"""

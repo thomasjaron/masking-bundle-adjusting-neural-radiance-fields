@@ -26,37 +26,7 @@ from warp import Lie
 
 import matplotlib.pyplot as plt
 
-import scipy.io
 import kornia
-import scipy.linalg
-
-
-
-def adjoint(A, E, f):
-    A_H = A.T.conj().to(E.dtype)
-    n = A.size(0)
-    M = torch.zeros(2*n, 2*n, dtype=E.dtype, device=E.device)
-    M[:n, :n] = A_H
-    M[n:, n:] = A_H
-    M[:n, n:] = E
-    return f(M)[:n, n:].to(A.dtype)
-
-def logm_scipy(A):
-    return torch.from_numpy(scipy.linalg.logm(A.cpu(), disp=False)[0]).to(A.device)
-
-class Logm(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, A):
-        assert A.ndim == 2 and A.size(0) == A.size(1)  # Square matrix
-        assert A.dtype in (torch.float32, torch.float64, torch.complex64, torch.complex128)
-        ctx.save_for_backward(A)
-        return logm_scipy(A)
-
-    @staticmethod
-    def backward(ctx, G):
-        A, = ctx.saved_tensors
-        return adjoint(A, G, logm_scipy)
-
 
 class Model(torch.nn.Module):
     """DL Model for Planar BARF"""
@@ -84,9 +54,7 @@ class Model(torch.nn.Module):
         self.timer = None
         self.warp_pert = None
         self.ep = self.it = self.vis_it = 0
-        self.gt_hom = None
-        self.logm = Logm.apply
-        self.keypoint_matrix = None
+        self.lie = Lie()
 
     def load_dataset(self):
         """Load all images and other inputs."""
@@ -102,11 +70,11 @@ class Model(torch.nn.Module):
         ]
         self.images = inputs.prepare_images(
             self.opt,
-            fps_images=image_paths, #filepaths
+            fps_images=image_paths,
             fps_masks=mask_paths if (self.opt.use_masks and not self.opt.use_implicit_mask) else None,
             fp_gt=f'data/planar/{self.dataset}/gt.png',
+            fps_hom = hom_paths if self.opt.use_homographies else None,
             edges = True if self.opt.use_edges else None,
-            fps_hom = hom_paths if self.opt.hom else None,
             )
 
 
@@ -240,59 +208,6 @@ class Model(torch.nn.Module):
         self.graph.neural_image.progress.data.fill_(self.it / self.opt.max_iter)
         return loss
     
-    def SL3_to_sl3(self, H):
-        """
-        Converts a 3x3 homography matrix to an 8-dimensional vector.
-        
-        Args:
-            H (torch.Tensor): A homography matrix of shape [batch_size, 3, 3].
-
-        Returns:
-            torch.Tensor: A tensor of shape [batch_size, 8].
-        """
-
-        log_matrices = self.logm(H)
-
-        #print(f"Hello this is log_matrices {log_matrices}")
-
-        # Extract elements from the 3x3 matrix that correspond to the original 8 elements
-        h1 = log_matrices[..., 0, 2]
-        h2 = log_matrices[..., 1, 2]
-        h3 = log_matrices[..., 0, 1]
-        h4 = log_matrices[..., 1, 0]
-        h5 = log_matrices[..., 0, 0]
-        h6 = -log_matrices[..., 1, 1] - h5
-        h7 = log_matrices[..., 2, 0]
-        h8 = log_matrices[..., 2, 1]
-        
-        # Stack them into an 8-dimensional vector
-        h_vector = torch.stack([h1, h2, h3, h4, h5, h6, h7, h8], dim=-1)
-        
-        return h_vector
-    
-    def process_homography(self, gt_hom):
-        # Assuming gt_hom is a tensor of shape [batch_size, 3, 3]
-        dsize_src = (480, 360)
-        dsize_dst = (480, 360)
-        
-        
-        # Normalize the homography
-        gt_hom_normalized = kornia.geometry.conversions.normalize_homography(gt_hom, dsize_src, dsize_dst)
-        print(f"normalized {gt_hom_normalized}")
-        
-        # Ensure the bottom-right entry is 1
-        gt_hom_normalized = gt_hom_normalized / gt_hom_normalized[..., 2, 2].unsqueeze(-1).unsqueeze(-1)
-
-        gt_hom_normalized_SL3 = gt_hom_normalized / gt_hom_normalized.det().pow(1.0 / 3.0).unsqueeze(-1).unsqueeze(-1)
-
-        #print(gt_hom_normalized_SL3.size())
-        
-        # Convert to 8-dimensional vectors
-        h_vectors = torch.stack([self.SL3_to_sl3(H) for H in gt_hom_normalized_SL3])
-        
-        return h_vectors
-    
-
     @torch.no_grad()
     def predict_entire_image(self):
         """Retrieve the full size image from the implicit neural image function"""
@@ -300,6 +215,12 @@ class Model(torch.nn.Module):
         rgb = self.graph.neural_image.forward(xy_grid) # [B, HW, 3]
         image = rgb.view(self.opt.H, self.opt.W, 3).detach().cpu().permute(2, 0, 1)
         return image
+
+    def homography_error(self, pred_hom, gt_hom):
+        # form B x 8-vector to B x 3 x 3 homography matrix
+        pred_h = self.lie.sl3_to_SL3(pred_hom)
+        # det(gt_hom) == det(pred_h) == 1 -> just subtract, normalize and calculate MSE
+        return torch.norm((pred_h - gt_hom)**2).mean()
 
     @torch.no_grad()
     def log_scalars(self, loss, metric=None, step=0, split="train"):
@@ -313,31 +234,12 @@ class Model(torch.nn.Module):
             for key,value in metric.items():
                 self.tb.add_scalar(f"{split}/{key}",value,step)
 
-
-        # #print("warp_param weight shape:", self.graph.warp_param.weight.shape)
-        # #print("gt_hom shape:", self.images.gt_hom.shape)
-        # # Move gt_hom to the same device as warp_param.weight
-        # device = self.graph.warp_param.weight.device
-        # gt_hom = self.images.gt_hom.float().to(device)
-        # # Process homography
-        # h_vectors = self.process_homography(gt_hom)
-        # #print(h_vectors)
-        # print("warp_param weight:", self.graph.warp_param.weight)
-        # print("h_vectors shape:", h_vectors)                               
-        # warp_error = (self.graph.warp_param.weight-h_vectors).norm(dim=-1).mean()
-        if self.opt.hom:
-            gt_hom = self.images.gt_hom
-            gt_hom = kornia.geometry.conversions.normalize_homography(gt_hom, (480,360), (480,360))
-
-            warp_hom = Lie.sl3_to_SL3(self, self.graph.warp_param.weight)
-
-            print(f"gt_hom: {gt_hom}")
-            print(f"warp_hom: {warp_hom}")
-        
-            warp_error = (warp_hom-gt_hom).norm(dim=-1).mean()
-
-            print(f"warp_error {warp_error}")
-            elf.tb.add_scalar(f"{split}/Homography_Error", warp_error, step)
+        if self.opt.use_homographies:
+            warp_error = self.homography_error(
+                self.graph.warp_param.weight,
+                self.images.gt_hom
+            )
+            self.tb.add_scalar(f"{split}/Homography_Error", warp_error, step)
 
 
         # compute PSNR
