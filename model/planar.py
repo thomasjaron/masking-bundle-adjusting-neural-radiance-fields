@@ -22,10 +22,11 @@ import util
 import util_vis
 from util import log
 from warp import Warp
+from warp import Lie
 
 import matplotlib.pyplot as plt
 
-# ============================ main engine for training and evaluation ============================
+import kornia
 
 class Model(torch.nn.Module):
     """DL Model for Planar BARF"""
@@ -53,23 +54,29 @@ class Model(torch.nn.Module):
         self.timer = None
         self.warp_pert = None
         self.ep = self.it = self.vis_it = 0
+        self.lie = Lie()
 
     def load_dataset(self):
         """Load all images and other inputs."""
         log.info("loading dataset...")
         image_paths = [
-            f'data/planar/{self.dataset}/{i}.png' for i in range(self.batch_size)
+            f'data/planar/{self.dataset}/{i+1}.png' for i in range(self.batch_size)
         ]
         mask_paths = [
-            f'data/planar/{self.dataset}/{i}-m.png' for i in range(self.batch_size)
+            f'data/planar/{self.dataset}/{i+1}-m.png' for i in range(self.batch_size)
+        ]
+        hom_paths = [
+            f'data/planar/{self.dataset}/H_0_{i+1}.mat' for i in range(self.batch_size)
         ]
         self.images = inputs.prepare_images(
             self.opt,
             fps_images=image_paths,
             fps_masks=mask_paths if (self.opt.use_masks and not self.opt.use_implicit_mask) else None,
             fp_gt=f'data/planar/{self.dataset}/gt.png',
-            edges = True if self.opt.use_edges else None
+            fps_hom = hom_paths if self.opt.use_homographies else None,
+            edges = True if self.opt.use_edges else None,
             )
+
 
     def build_networks(self):
         """Builds Network"""
@@ -200,7 +207,7 @@ class Model(torch.nn.Module):
         util.update_timer(self.opt, self.timer, self.ep, len(loader))
         self.graph.neural_image.progress.data.fill_(self.it / self.opt.max_iter)
         return loss
-
+    
     @torch.no_grad()
     def predict_entire_image(self):
         """Retrieve the full size image from the implicit neural image function"""
@@ -208,6 +215,12 @@ class Model(torch.nn.Module):
         rgb = self.graph.neural_image.forward(xy_grid) # [B, HW, 3]
         image = rgb.view(self.opt.H, self.opt.W, 3).detach().cpu().permute(2, 0, 1)
         return image
+
+    def homography_error(self, pred_hom, gt_hom):
+        # form B x 8-vector to B x 3 x 3 homography matrix
+        pred_h = self.lie.sl3_to_SL3(pred_hom)
+        # det(gt_hom) == det(pred_h) == 1 -> just subtract, normalize and calculate MSE
+        return torch.norm((pred_h - gt_hom)**2).mean()
 
     @torch.no_grad()
     def log_scalars(self, loss, metric=None, step=0, split="train"):
@@ -220,8 +233,17 @@ class Model(torch.nn.Module):
         if metric is not None:
             for key,value in metric.items():
                 self.tb.add_scalar(f"{split}/{key}",value,step)
+
+        if self.opt.use_homographies:
+            warp_error = self.homography_error(
+                self.graph.warp_param.weight,
+                self.images.gt_hom
+            )
+            self.tb.add_scalar(f"{split}/Homography_Error", warp_error, step)
+
+
         # compute PSNR
-        psnr = -10 * loss.render.log10()
+        psnr = -10 * loss.rgb.log10()
         self.tb.add_scalar(f"{split}/PSNR", psnr, step)
 
     @torch.no_grad()

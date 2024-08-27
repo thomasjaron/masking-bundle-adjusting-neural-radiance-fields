@@ -11,6 +11,7 @@ from easydict import EasyDict as edict
 
 import cv2
 import numpy as np
+import kornia
 
 def load_images(fps, opt, mode='RGB', invert_gray=False):
     """Loads a set of images into a tensor from a list of file pointers.
@@ -83,8 +84,25 @@ def erode_images(images_tensor, device, kernel=(5, 5)):
         processed_images.append(i)
     return torch.stack(processed_images)
 
+def load_homography(fps, width, height, device):
+    """Loads a set of homography matrices into a tensor from a list of file pointers.
+    Given the device, it saves these homographies to either CPU or GPU."""
+    if not fps:
+        return None
+    if not isinstance(fps, list):
+        raise TypeError("Function requires a list of input file paths!")
+    
+    loaded_homographies = []
+    for fp in fps:
+        homography = np.loadtxt(fp)
+        homography_tensor = torch.tensor(homography, dtype=torch.float32).to(device)
+        loaded_homographies.append(homography_tensor)
+    gt_hom = torch.stack(loaded_homographies)
+    # Normalize them to range of [-1, +1] for comparisons to predicted homographies
+    norm_hom = kornia.geometry.conversions.normalize_homography(gt_hom, (width,height), (width,height))
+    return norm_hom
 
-def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, edges=True):
+def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, fps_hom=None, edges=True):
     """Load distorted and occluded images used for reconstruction.
     This function assumes a 
     """
@@ -93,6 +111,8 @@ def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, edges=True)
     inputs.gt = load_single_image(fp_gt, opt.device)
     # load images from dataset
     inputs.rgb = load_images(fps_images, opt)
+    # load homographies
+    inputs.gt_hom = load_homography(fps_hom, opt.W, opt.H, opt.device)
     # Invert loaded masks (SIDAR Dataset sets occlusions to 1)
     inputs.masks = load_images(fps_masks, opt, mode='L', invert_gray=True)
     inputs.masks_eroded = erode_images(inputs.masks, opt.device, kernel=(5,5)) if (inputs.masks is not None) else None

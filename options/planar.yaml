@@ -3,19 +3,21 @@ W: 480
 patch_H: 180
 patch_W: 240
 
-dataset: only_occlusions                                    # directory containing images
+dataset: cat_batch5                                    # directory containing images
 
 # Mask Settings
 use_masks: True                                             # utilize premade masks in loss calculation
-use_implicit_mask: True                                     # generate masks for input images during training 
+use_implicit_mask: False                                     # generate masks for input images during training 
 N_vocab: 1500                                               # vocabulary size for embedding of images for mask generation
 build_single_masks: False                                    # build a separate mask for each input image instead of a generic mask for all images
 
 # RGB and Edge Settings
 use_edges: True                                             # align edges and calculate loss for that
-alpha_initial: 1.00                                         # alpha factor: make influence of edges and rgb alignment on the loss
-alpha_final: 0.90                                           # dependant on the current iteration                                   
+alpha_initial: 0.0                                         # alpha factor: make influence of edges and rgb alignment on the loss
+alpha_final: 1.0                                           # dependant on the current iteration                                   
 use_cropped_images: True                                    # scale down input images to speed up calculation
+# Homography settings
+use_homographies: True                                     # Whether or not to load homographies for error calculation
 
 # default
 
@@ -92,7 +94,4 @@ visdom:                                                     # Visdom options
 
 freq:                                                       # periodic actions during training
     scalar: 20                                              # log losses and scalar states (every N iterations)
-    vis: 50                                                # visualize results (every N iterations)
-    val: 20                                                 # validate on val set (every N epochs)
-    ckpt: 50                                                # save checkpoint (every N epochs)
-
+    vis: 100                                                # visualize results (every N iterations)
