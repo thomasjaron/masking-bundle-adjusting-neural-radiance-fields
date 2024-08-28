@@ -60,13 +60,13 @@ class Model(torch.nn.Module):
         """Load all images and other inputs."""
         log.info("loading dataset...")
         image_paths = [
-            f'data/planar/{self.dataset}/{i+1}.png' for i in range(self.batch_size)
+            f'data/planar/{self.dataset}/{i}.png' for i in range(0, self.batch_size)
         ]
         mask_paths = [
-            f'data/planar/{self.dataset}/{i+1}-m.png' for i in range(self.batch_size)
+            f'data/planar/{self.dataset}/{i}-m.png' for i in range(0, self.batch_size)
         ]
         hom_paths = [
-            f'data/planar/{self.dataset}/H_0_{i+1}.mat' for i in range(self.batch_size)
+            f'data/planar/{self.dataset}/H_0_{i}.mat' for i in range(1, self.batch_size)
         ]
         self.images = inputs.prepare_images(
             self.opt,

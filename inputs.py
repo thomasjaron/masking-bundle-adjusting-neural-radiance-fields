@@ -84,7 +84,7 @@ def erode_images(images_tensor, device, kernel=(5, 5)):
         processed_images.append(i)
     return torch.stack(processed_images)
 
-def load_homography(fps, width, height, device):
+def load_homography(fps, width, height, device, append_zero = True):
     """Loads a set of homography matrices into a tensor from a list of file pointers.
     Given the device, it saves these homographies to either CPU or GPU."""
     if not fps:
@@ -93,6 +93,8 @@ def load_homography(fps, width, height, device):
         raise TypeError("Function requires a list of input file paths!")
     
     loaded_homographies = []
+    if append_zero:
+        loaded_homographies.append(torch.eye(3, dtype=torch.float32).to(device))
     for fp in fps:
         homography = np.loadtxt(fp)
         homography_tensor = torch.tensor(homography, dtype=torch.float32).to(device)
