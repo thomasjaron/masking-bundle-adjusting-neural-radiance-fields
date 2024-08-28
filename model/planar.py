@@ -71,7 +71,7 @@ class Model(torch.nn.Module):
         self.images = inputs.prepare_images(
             self.opt,
             fps_images=image_paths,
-            fps_masks=mask_paths if (self.opt.use_masks and not self.opt.use_implicit_mask) else None,
+            fps_masks=mask_paths if (self.opt.use_masks) else None,
             fp_gt=f'data/planar/{self.dataset}/gt.png',
             fps_hom = hom_paths if self.opt.use_homographies else None,
             edges = True if self.opt.use_edges else None,
@@ -198,7 +198,7 @@ class Model(torch.nn.Module):
         # after train iteration
         if (self.it + 1) % self.opt.freq.scalar == 0:
             if self.tb:
-                self.log_scalars(loss, step=self.it + 1, split="train")
+                self.log_scalars(loss, var, step=self.it + 1, split="train")
         if (self.it + 1 ) % self.opt.freq.vis == 0:
             self.visualize(var, step=self.it + 1, split="train")
         self.it += 1
@@ -223,7 +223,7 @@ class Model(torch.nn.Module):
         return torch.norm((pred_h - gt_hom)**2).mean()
 
     @torch.no_grad()
-    def log_scalars(self, loss, metric=None, step=0, split="train"):
+    def log_scalars(self, loss, var, metric=None, step=0, split="train"):
         """Log scalar values into the tensorboard instance"""
         for key,value in loss.items():
             if key=="all":
@@ -233,6 +233,13 @@ class Model(torch.nn.Module):
         if metric is not None:
             for key,value in metric.items():
                 self.tb.add_scalar(f"{split}/{key}",value,step)
+
+        if self.opt.use_implicit_mask:
+            mask_error = self.graph.mse_loss(
+                var.mask_prediction_map,
+                self.images.masks
+            )
+            self.tb.add_scalar(f"{split}/Mask_Error", mask_error, step)
 
         if self.opt.use_homographies:
             warp_error = self.homography_error(
@@ -258,9 +265,15 @@ class Model(torch.nn.Module):
         # visualize in Tensorboard
         if self.opt.tb:
             colors = self.box_colors
-            util_vis.tb_image(
-                self.opt, self.tb, self.it+1, "train", "input_images", util_vis.color_border(var.images.rgb, colors) # pylint: disable=line-too-long
-                )
+            if self.vis_it == 1:
+                # only save these images once
+                util_vis.tb_image(
+                    self.opt, self.tb, self.it+1, "train", "input_images", util_vis.color_border(var.images.rgb, colors) # pylint: disable=line-too-long
+                    )
+                util_vis.tb_image(
+                    self.opt, self.tb, self.it+1, "train", "input_masks", util_vis.color_border(var.images.masks, colors) # pylint: disable=line-too-long
+                    )
+            # predicted image
             util_vis.tb_image(
                 self.opt, self.tb, self.it+1, "train", "predicted_image", frame[None]
                 )
@@ -271,11 +284,11 @@ class Model(torch.nn.Module):
                     self.opt, self.tb, self.it+1, "train", "implicit_masks", util_vis.color_border((mask_formed), colors, width=1, depth=1) # pylint: disable=line-too-long
                     )
             # Print out Predictions Edges
-            if self.opt.use_edges:
-                edge_formed = var.edge_prediction.view(self.batch_size, int(self.opt.patch_H), int(self.opt.patch_W), 3).permute(0, 3, 1, 2).cpu()
-                util_vis.tb_image(
-                    self.opt, self.tb, self.it+1, "train", "predicted_edges", edge_formed
-                    )
+            # if self.opt.use_edges:
+            #     edge_formed = var.edge_prediction.view(self.batch_size, int(self.opt.patch_H), int(self.opt.patch_W), 3).permute(0, 3, 1, 2).cpu()
+            #     util_vis.tb_image(
+            #         self.opt, self.tb, self.it+1, "train", "predicted_edges", edge_formed
+            #         )
 
 # ============================ Computation Graph for forward/backprop ============================
 
