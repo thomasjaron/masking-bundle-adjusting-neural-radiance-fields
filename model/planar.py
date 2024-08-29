@@ -386,7 +386,7 @@ class Graph(torch.nn.Module):
         else:
             masked_diff = (pred.contiguous() - labels) * masks
             masked_loss = masked_diff ** 2
-            loss = masked_loss.sum() / masks.sum()  # Only average over unmasked elements
+            loss = masked_loss.sum() / (masks.sum() * 3)
         return loss
 
 # ============================ Neural Image Function ============================
