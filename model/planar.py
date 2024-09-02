@@ -270,9 +270,10 @@ class Model(torch.nn.Module):
                 util_vis.tb_image(
                     self.opt, self.tb, self.it+1, "train", "input_images", util_vis.color_border(var.images.rgb, colors) # pylint: disable=line-too-long
                     )
-                util_vis.tb_image(
-                    self.opt, self.tb, self.it+1, "train", "input_masks", util_vis.color_border(var.images.masks, colors) # pylint: disable=line-too-long
-                    )
+                if self.opt.use_masks:
+                    util_vis.tb_image(
+                        self.opt, self.tb, self.it+1, "train", "input_masks", util_vis.color_border(var.images.masks, colors) # pylint: disable=line-too-long
+                        )
             # predicted image
             util_vis.tb_image(
                 self.opt, self.tb, self.it+1, "train", "predicted_image", frame[None]
