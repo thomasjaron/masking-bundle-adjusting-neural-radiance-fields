@@ -3,7 +3,7 @@ W: 480
 patch_H: 180
 patch_W: 240
 
-dataset: cat_batch5                                    # directory containing images
+dataset: cat_batch3                                  # directory containing images
 
 # Mask Settings
 use_masks: True                                             # utilize premade masks in loss calculation

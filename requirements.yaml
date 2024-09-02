@@ -1,7 +1,8 @@
-name: better-barf
+name: marf
 channels:
   - conda-forge
   - pytorch
+  - nvidia
 dependencies:
   - numpy
   - scipy
@@ -25,4 +26,3 @@ dependencies:
   - kornia
   - pip:
     - lpips
-    # - pymcubes

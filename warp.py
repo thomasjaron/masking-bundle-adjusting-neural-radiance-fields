@@ -69,19 +69,7 @@ class Warp:
 
     def warp_grid(self, xy_grid, warp):
         """Depending on given options, perform a transformation onto a grid or image."""
-        if self.warp_type == "translation":
-            assert self.dof == 2
-            warped_grid = xy_grid + warp[..., None, :]
-        elif self.warp_type == "rotation":
-            assert self.dof == 1
-            warp_matrix = lie.so2_to_SO2(warp)
-            warped_grid = xy_grid @ warp_matrix.transpose(-2, -1)  # [B, HW, 2]
-        elif self.warp_type == "rigid":
-            assert self.dof == 3
-            xy_grid_hom = self.to_hom(xy_grid)
-            warp_matrix = lie.se2_to_SE2(warp)
-            warped_grid = xy_grid_hom @ warp_matrix.transpose(-2, -1)  # [B, HW, 2]
-        elif self.warp_type == "homography":
+        if self.warp_type == "homography":
             assert self.dof == 8
             xy_grid_hom = self.to_hom(xy_grid)
             warp_matrix = lie.sl3_to_SL3(warp)
@@ -107,50 +95,6 @@ class Warp:
 class Lie():
     """Linear algebra functions"""
 
-    def so2_to_SO2(self, theta):  # [...,1]
-        """Docstring"""
-        thetax = torch.stack([torch.cat([theta.cos(), -theta.sin()], dim=-1),
-                              torch.cat([theta.sin(), theta.cos()], dim=-1)], dim=-2)
-        R = thetax
-        return R
-
-    def SO2_to_so2(self, R):  # [...,2,2]
-        """Docstring"""
-        theta = torch.atan2(R[..., 1, 0], R[..., 0, 0])
-        return theta[..., None]
-
-    def so2_jacobian(self, X, theta):  # [...,N,2],[...,1]
-        """Docstring"""
-        dR_dtheta = torch.stack([torch.cat([-theta.sin(), -theta.cos()], dim=-1),
-                                 # [...,2,2]
-                                 torch.cat([theta.cos(), -theta.sin()], dim=-1)], dim=-2)
-        J = X@dR_dtheta.transpose(-2, -1)
-        return J[..., None]  # [...,N,2,1]
-
-    def se2_to_SE2(self, delta):  # [...,3]
-        """Docstring"""
-        u, theta = delta.split([2, 1], dim=-1)
-        A = self.taylor_A(theta)
-        B = self.taylor_B(theta)
-        V = torch.stack([torch.cat([A, -B], dim=-1),
-                         torch.cat([B, A], dim=-1)], dim=-2)
-        R = self.so2_to_SO2(theta)
-        Rt = torch.cat([R, V@u[..., None]], dim=-1)
-        return Rt
-
-    def SE2_to_se2(self, Rt, eps=1e-7):  # [...,2,3]
-        """Docstring"""
-        R, t = Rt.split([2, 1], dim=-1)
-        theta = self.SO2_to_so2(R)
-        A = self.taylor_A(theta)
-        B = self.taylor_B(theta)
-        denom = (A**2+B**2+eps)[..., None]
-        invV = torch.stack([torch.cat([A, B], dim=-1),
-                            torch.cat([-B, A], dim=-1)], dim=-2)/denom
-        u = (invV@t)[..., 0]
-        delta = torch.cat([u, theta], dim=-1)
-        return delta
-
     def sl3_to_SL3(self, h):
         """homography: directly expand matrix exponential"""
         # https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.61.6151&rep=rep1&type=pdf
@@ -160,24 +104,5 @@ class Lie():
                          torch.cat([h7, h8, h6], dim=-1)], dim=-2)
         H = A.matrix_exp()
         return H
-
-    def taylor_A(self, x, nth=10):
-        """Taylor expansion of sin(x) / x"""
-        ans = torch.zeros_like(x)
-        denom = 1.
-        for i in range(nth+1):
-            if i > 0:
-                denom *= (2*i)*(2*i+1)
-            ans = ans+(-1)**i*x**(2*i)/denom
-        return ans
-
-    def taylor_B(self, x, nth=10):
-        """Taylor expansion of (1 - cos(x)) / x"""
-        ans = torch.zeros_like(x)
-        denom = 1.
-        for i in range(nth+1):
-            denom *= (2*i+1)*(2*i+2)
-            ans = ans+(-1)**i*x**(2*i+1)/denom
-        return ans
 
 lie = Lie()
