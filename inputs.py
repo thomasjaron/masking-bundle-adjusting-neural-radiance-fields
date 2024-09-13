@@ -11,7 +11,7 @@ from easydict import EasyDict as edict
 from itertools import combinations
 #from kornia.feature import LoFTR
 from copy import deepcopy
-from src.loftr import LoFTR, default_cfg
+#from src.loftr import LoFTR, default_cfg
 
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
@@ -21,6 +21,7 @@ import imageio
 
 import cv2
 import numpy as np
+import kornia
 
 def load_images(fps, opt, mode='RGB', invert_gray=False):
     """Loads a set of images into a tensor from a list of file pointers.
@@ -75,6 +76,9 @@ def compute_edges(images_tensor, device):
         i = cv2.GaussianBlur(i, (5, 5), 0)
         i = torchvision_F.to_tensor(i).to(device)
         processed_images.append(i)
+        #save_images(torch.stack(processed_images), 'origin', mode='L')
+
+
     return torch.stack(processed_images)
 
 def erode_images(images_tensor, device, kernel=(5, 5)):
@@ -91,6 +95,27 @@ def erode_images(images_tensor, device, kernel=(5, 5)):
         i = cv2.erode(i, cv2.getStructuringElement(cv2.MORPH_RECT, kernel))
         i = torchvision_F.to_tensor(i).to(device)
         processed_images.append(i)
+    return torch.stack(processed_images)
+
+def blur_images(images_tensor, device, kernel=(3, 3), sigma=0):
+    """Apply Gaussian blur to grayscale image tensor containing 1 or more images."""
+    # Images = tensor of size [B, x, H, W]
+    # device = string
+    processed_images = []
+    
+    for image in images_tensor:
+        # image preparation
+        if image.is_cuda:
+            image = image.detach().cpu()
+        i = image.numpy()
+        i = np.transpose(i, (1, 2, 0))  # Change format to HWC for OpenCV   
+        # Apply Gaussian blur with the specified kernel and sigma
+        i = cv2.GaussianBlur(i, kernel, sigma)
+        # Convert back to tensor and move to the specified device
+        i = torchvision_F.to_tensor(i).to(device)
+        
+        processed_images.append(i)
+    
     return torch.stack(processed_images)
 
 def load_homography(fps, width, height, device, append_zero = True):
@@ -126,12 +151,20 @@ def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, fps_hom=Non
     inputs.gt_hom = load_homography(fps_hom, opt.W, opt.H, opt.device)
     # Invert loaded masks (SIDAR Dataset sets occlusions to 1)
     inputs.masks = load_images(fps_masks, opt, mode='L', invert_gray=True)
-    inputs.masks_eroded = erode_images(inputs.masks, opt.device, kernel=(5,5)) if (inputs.masks is not None) else None
+    #inputs.masks_eroded = erode_images(inputs.masks, opt.device, kernel=(5,5)) if (inputs.masks is not None) else None
+    inputs.masks_eroded = blur_images(inputs.masks, opt.device, kernel=(3,3)) if (inputs.masks is not None) else None
     ##### perform image processing and save the results
     # save grayscale version of images
     inputs.gray = load_images(fps_images, opt, mode='L')
     # generate edge images
-    inputs.edges = compute_edges(inputs.gray, opt.device) if edges else None
+    if edges:
+        inputs.edges = compute_edges(inputs.gray, opt.device)
+        inputs.edges *= inputs.masks_eroded
+        save_images(inputs.edges, 'test2', mode='L')
+
+    else:
+        inputs.edges = None
+
 
     return inputs
 

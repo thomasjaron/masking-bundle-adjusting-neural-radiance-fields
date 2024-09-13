@@ -333,7 +333,7 @@ class Graph(torch.nn.Module):
         xy_grid_warped = self.warp.warp_grid(xy_grid, self.warp_param.weight)
         var.rgb_prediction = self.neural_image.forward(xy_grid_warped) # [B, HW, 3]
         var.rgb_prediction_map = var.rgb_prediction.view(self.batch_size, int(self.h), int(self.w), 3).permute(0, 3, 1, 2) # [B, 3, H, W]
-        var.edge_prediction = inputs.compute_edges(var.rgb_prediction_map, self.opt.device) # [B, 3, H, W]
+        var.edge_prediction = inputs.compute_edges(var.rgb_prediction_map, self.opt.device) if self.opt.use_edges else None # [B, 3, H, W]
         ############ Implicit Mask Generation ##########################
         masks = []
         if self.opt.use_implicit_mask:
