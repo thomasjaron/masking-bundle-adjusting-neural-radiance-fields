@@ -8,10 +8,19 @@ import PIL.ImageOps
 import imageio
 import torchvision.transforms.functional as torchvision_F
 from easydict import EasyDict as edict
+from itertools import combinations
+#from kornia.feature import LoFTR
+from copy import deepcopy
+from src.loftr import LoFTR, default_cfg
+
+import matplotlib.cm as cm
+import matplotlib.pyplot as plt
+import matplotlib
+import itertools
+import imageio
 
 import cv2
 import numpy as np
-import kornia
 
 def load_images(fps, opt, mode='RGB', invert_gray=False):
     """Loads a set of images into a tensor from a list of file pointers.
@@ -38,7 +47,7 @@ def save_images(images, suffix, mode='RGB'):
     for i, im in enumerate(images):
         gr = torchvision_F.to_pil_image(im, mode=mode)
         # frame = (gr * 255).cpu().byte().permute(1, 2, 0).numpy()
-        imageio.imsave(f"{i}-{suffix}.png", gr)
+        imageio.imsave(f"output\masks\{i}-{suffix}.png", gr)
 
 def load_single_image(fp, device, mode='RGB'):
     """Load a single image with PIL and convert it to a tensor."""
@@ -125,3 +134,45 @@ def prepare_images(opt, fps_images=None, fps_masks=None, fp_gt=None, fps_hom=Non
     inputs.edges = compute_edges(inputs.gray, opt.device) if edges else None
 
     return inputs
+
+"""
+NOT YET IMPLEMENTED
+def calculate_keypoints(images):
+    # Load LoFTR model with configuration
+    cfg = deepcopy(default_cfg)
+    cfg['coarse']['temp_bug_fix'] = True
+    matcher = LoFTR(config=default_cfg)
+    matcher.load_state_dict(torch.load("weights/indoor_ds_new.ckpt")['state_dict'])
+    matcher = matcher.eval().cuda()
+
+    keypoint_counts = {}
+
+    for (i, img0), (j, img1) in itertools.combinations(enumerate(images), 2):
+        img0_raw = img0.detach().cpu().numpy().mean(axis=0).astype(np.uint8)
+        img1_raw = img1.detach().cpu().numpy().mean(axis=0).astype(np.uint8)
+
+        height, width = img0_raw.shape[:2]
+        new_width = (width // 8) * 8
+        new_height = (height // 8) * 8
+
+        img0_raw = cv2.resize(img0_raw, (new_width, new_height))
+        img1_raw = cv2.resize(img1_raw, (new_width, new_height))
+
+        img0_tensor = torch.from_numpy(img0_raw)[None][None].cuda() / 255.
+        img1_tensor = torch.from_numpy(img1_raw)[None][None].cuda() / 255.
+        batch = {'image0': img0_tensor, 'image1': img1_tensor}
+
+        # Inference with LoFTR
+        with torch.no_grad():
+            matcher(batch)
+            mkpts0 = batch['mkpts0_f'].cpu().numpy()
+            mkpts1 = batch['mkpts1_f'].cpu().numpy()
+            mconf = batch['mconf'].cpu().numpy()
+
+        num_keypoints = len(mkpts0)
+        # Convert tuple to string
+        keypoint_counts[f"{i},{j}"] = num_keypoints
+        print(f"There are {num_keypoints} keypoints between image pair ({i}, {j})")
+
+    return keypoint_counts
+"""
